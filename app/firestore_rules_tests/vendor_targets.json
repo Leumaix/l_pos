@@ -1,0 +1,4 @@
+{
+  "firebase": "12.18.0",
+  "@firebase/rules-unit-testing": "5.0.2"
+}

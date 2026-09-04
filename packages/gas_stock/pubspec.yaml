@@ -1,0 +1,14 @@
+name: gas_stock
+description: >
+  Pure, unit-tested gas pricing/stock logic for Leumadepos. Gas sold by
+  weight or by naira amount, tracked internally in integer "units"
+  (1 unit = ₦1 of gas at the current rate) so money math never rounds.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dev_dependencies:
+  test: ^1.25.0
+  lints: ^4.0.0

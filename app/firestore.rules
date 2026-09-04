@@ -1,0 +1,286 @@
+rules_version = '2';
+
+// Leumadepos — Firestore security rules.
+//
+// Tenant isolation is structural: every business's data lives under
+// businesses/{businessId}/..., and isActiveStaffOf() is the ONE gate that
+// decides who can read or write anything in that subtree. It is not a
+// convention the client is trusted to follow — every rule below calls it
+// directly, so a request the client never intended (a bug, a modified
+// build, a raw REST/SDK call bypassing the app entirely) is bound by the
+// exact same check as the real app.
+//
+// What this does NOT do: validate the CONTENT of a write (e.g. that a
+// sale's total actually matches its line items, or that a stock delta is
+// internally consistent). That's enforced by the app's own transaction
+// logic (CheckoutController et al.), not by these rules — there is no
+// Cloud Functions layer on Spark to re-derive and check that server-side.
+// The boundary these rules enforce is WHO can write to a business's data
+// (an active staff member of THAT business, no one else, ever
+// unauthenticated) — not a guarantee that every write is well-formed.
+// Accepted for MVP: staff are trusted employees of a single small
+// business, not the general public.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // The actual access gate: signed in, AND a staff doc for this UID
+    // exists under this specific business, AND it's marked active. Every
+    // rule below calls this directly rather than assuming the client only
+    // ever requests its own business's path.
+    function isActiveStaffOf(businessId) {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/businesses/$(businessId)/staff/$(request.auth.uid))
+        && get(/databases/$(database)/documents/businesses/$(businessId)/staff/$(request.auth.uid)).data.active == true;
+    }
+
+    // An active staff member whose role is specifically 'owner' — the
+    // one role trusted to provision other staff in-app (see /invites and
+    // /staff's allow-create below). Business creation itself stays
+    // console-only and out-of-band regardless of role; this only governs
+    // who can add STAFF to a business that already exists.
+    function isActiveOwnerOf(businessId) {
+      return isActiveStaffOf(businessId)
+        && get(/databases/$(database)/documents/businesses/$(businessId)/staff/$(request.auth.uid)).data.role == 'owner';
+    }
+
+    match /businesses/{businessId} {
+      // Business settings (name, gas rate, tank capacity): readable by
+      // active staff. Writable only in one narrow way: an active owner
+      // may update settings.gasTankCapacityKg — nothing else on this
+      // document, ever, from the client. That field only feeds the Stock
+      // screen's gauge, so it's safe to open up on its own; the gas RATE
+      // stays console-only (see Settings screen's doc comment for why —
+      // stock is tracked in units pegged to it, a rate change needs
+      // careful recomputation, not a plain field swap).
+      allow read: if isActiveStaffOf(businessId);
+      allow update: if isActiveOwnerOf(businessId)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['settings'])
+        && (
+          !('settings' in resource.data)
+          || request.resource.data.settings.diff(resource.data.settings).affectedKeys().hasOnly(['gasTankCapacityKg'])
+        );
+      allow create, delete: if false;
+
+      match /staff/{staffId} {
+        // A staff member reads only their OWN doc, never the roster —
+        // nothing in the app needs the full staff list, and phone/email
+        // on a colleague's record isn't this client's business.
+        allow read: if isSignedIn() && request.auth.uid == staffId;
+
+        // Self-service provisioning: lets an owner add staff in-app (see
+        // /invites below) without touching the console — business
+        // creation itself stays console-only, this is only about adding
+        // staff to a business that already exists. A signed-in user may
+        // create ONLY their own staff doc (their uid, not anyone else's),
+        // ONLY if a real, owner-issued invite exists for their auth
+        // email under THIS business, and ONLY with the exact role that
+        // invite specifies — the role is never taken from the client's
+        // own write, it's cross-checked against the invite server-side,
+        // so nobody can grant themselves "owner" (or any role) that
+        // wasn't already decided by an existing owner. email_verified is
+        // redundant in practice (email-link sign-in always sets it) but
+        // cheap, explicit insurance that this is gated on PROVEN email
+        // ownership, not just any signed-in uid.
+        allow create: if isSignedIn()
+          && request.auth.token.email_verified == true
+          && request.resource.id == request.auth.uid
+          && exists(/databases/$(database)/documents/businesses/$(businessId)/invites/$(request.auth.token.email.lower()))
+          && request.resource.data.role == get(/databases/$(database)/documents/businesses/$(businessId)/invites/$(request.auth.token.email.lower())).data.role;
+
+        // Everything else about /staff stays console-only, exactly as
+        // before: no client update or delete, ever.
+        allow update, delete: if false;
+      }
+
+      match /invites/{email} {
+        // Who can ISSUE a staff invite: only an active owner of THIS
+        // business — the in-app on-ramp is gated exactly as tightly as
+        // console provisioning was. No update path: a changed invite is
+        // a delete-then-create (see the client), so there's never an
+        // ambiguous partial edit to reason about.
+        allow create: if isActiveOwnerOf(businessId);
+
+        // Who can DELETE one: an active owner revoking a pending invite
+        // (the account-menu UI), OR the invited person themselves,
+        // consuming their OWN matching invite as the second half of the
+        // atomic self-provisioning batch in /staff's create rule below
+        // (FirebaseAuthRepository._loadStaffDoc: staff-doc create +
+        // invite delete, committed together). If this were owner-only,
+        // that batch could never succeed for a brand-new self-service
+        // attendant or owner — they have no staff doc yet at the moment
+        // of that delete, so isActiveOwnerOf is always false for them,
+        // and the whole atomic write fails, taking the otherwise-valid
+        // staff-doc creation down with it. This went undetected because
+        // the very first owner on this project was bootstrapped by hand
+        // in the console instead, never exercising invite consumption
+        // at all until a second real invite was tested. Self-deleting
+        // your own invite without ever completing the matching staff
+        // doc is harmless — it only forfeits your own pending invite,
+        // never grants access to anything.
+        allow delete: if isActiveOwnerOf(businessId)
+          || (isSignedIn() && request.auth.token.email.lower() == email);
+
+        allow update: if false;
+
+        // Read access is deliberately narrower than write: an owner can
+        // read any invite (to list/manage pending ones), but anyone else
+        // signed in can read ONLY the single invite that matches their
+        // OWN auth email — never the whole collection. This is what
+        // lets the client read the name/role it needs to write into its
+        // own staff-doc creation above, without exposing who else has
+        // been invited.
+        allow read: if isActiveOwnerOf(businessId)
+          || (isSignedIn() && request.auth.token.email.lower() == email);
+      }
+
+      match /gasStock/{docId} {
+        allow read: if isActiveStaffOf(businessId);
+        allow write: if isActiveStaffOf(businessId);
+      }
+
+      match /gasStockLedger/{entryId} {
+        // Append-only audit trail — created by a sale or a restock,
+        // never edited or removed after the fact.
+        allow read: if isActiveStaffOf(businessId);
+        allow create: if isActiveStaffOf(businessId);
+        allow update, delete: if false;
+      }
+
+      match /categories/{categoryId} {
+        // Owner-managed catalog: only an active owner can create, rename,
+        // reorder (an update touching sortOrder), or delete a category.
+        // Deleting a category that still has products in it is blocked
+        // client-side, not here — rules can't query "does any product
+        // reference this category", only check specific known document
+        // paths (see FirebaseInventoryRepository.deleteCategory).
+        allow read: if isActiveStaffOf(businessId);
+        allow create, update, delete: if isActiveOwnerOf(businessId);
+      }
+
+      match /products/{productId} {
+        allow read: if isActiveStaffOf(businessId);
+
+        // Owners can do anything to a product — rename, reprice, move it
+        // to a different category, or remove it entirely.
+        allow create, delete: if isActiveOwnerOf(businessId);
+
+        // A regular active staff member can still sell (which decrements
+        // stockCount) and restock (which increments it) — that's the one
+        // field they're allowed to move. They can't create or delete a
+        // product, and an update touching anything else (name, price,
+        // categoryId, unit) is denied even for them, so a staff member
+        // can never silently reprice or rename the catalog while ringing
+        // up a sale.
+        //
+        // stockCount >= 0 applies regardless of who's writing — unlike
+        // gas (a running balance that's allowed to dip negative as a
+        // reconciliation signal, by design), a product is a discrete,
+        // physically countable thing; a negative count is never
+        // meaningful. This is what actually stops the real-world race
+        // this guards against: two staff each sell the last unit before
+        // either checkout commits — each sale is its own atomic
+        // transaction, but the two transactions aren't atomic with each
+        // other, so without this, a second FieldValue.increment(-1)
+        // could still land after the first already sold the last one.
+        allow update: if request.resource.data.stockCount >= 0
+          && (
+            isActiveOwnerOf(businessId)
+            || (
+              isActiveStaffOf(businessId)
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stockCount'])
+            )
+          );
+      }
+
+      match /customers/{customerId} {
+        allow read: if isActiveStaffOf(businessId);
+
+        // A brand-new customer can only start at a nonzero balance if
+        // an owner is creating it (migrating an existing debtor's
+        // opening balance — see Customers screen). Any active staff
+        // member can still add a walk-in at the zero balance every new
+        // customer normally starts at.
+        allow create: if isActiveStaffOf(businessId)
+          && (isActiveOwnerOf(businessId) || request.resource.data.balance == 0);
+
+        // An owner can freely rename/re-phone/adjust a customer. A
+        // staff member's update is scoped tighter than just "touches
+        // balance": lastTransactionId must point at a transactions/
+        // doc that ALSO gets created in this exact same write (see
+        // FirebaseCustomerRepository/FirebaseCheckoutRepository — both
+        // use one runTransaction for the pair), and getAfter() checks
+        // that doc's balanceAfter matches the new balance being
+        // written here. Without this, "isActiveStaffOf" alone would
+        // let a staff member move balance to any number with a single
+        // bare update — bypassing recordCreditSale/recordRepayment
+        // entirely and leaving no trace. This doesn't independently
+        // verify the ledger entry's own amountNaira/type arithmetic
+        // (rules can't reach into a related collection's history to
+        // recompute a running total) — but it does mean any balance
+        // change is now permanently paired with a real, staff-
+        // attributed, append-only record carrying the exact number
+        // written, not silent.
+        allow update: if isActiveOwnerOf(businessId)
+          || (
+            isActiveStaffOf(businessId)
+            && (
+              !('balance' in request.resource.data.diff(resource.data).affectedKeys())
+              || (
+                request.resource.data.diff(resource.data).affectedKeys().hasOnly(['balance', 'lastTransactionId'])
+                && request.resource.data.balance ==
+                   getAfter(/databases/$(database)/documents/businesses/$(businessId)/customers/$(customerId)/transactions/$(request.resource.data.lastTransactionId)).data.balanceAfter
+              )
+            )
+          );
+
+        // No delete path — never exercised by the app (no
+        // deleteCustomer method exists), and removing a customer
+        // record isn't a routine staff action even if it were built
+        // later; tightened here from the blanket rule this replaced.
+
+        match /transactions/{transactionId} {
+          // Append-only ledger — a correction is a new transaction, not
+          // an edit to history.
+          allow read: if isActiveStaffOf(businessId);
+          allow create: if isActiveStaffOf(businessId);
+          allow update, delete: if false;
+        }
+      }
+
+      match /sales/{saleId} {
+        // A sale is immutable once recorded — no update/delete path at
+        // all, from anyone, ever.
+        //
+        // Read is owner-only: this is the collection Reports and Home's
+        // "Today's sales" aggregate from, and revenue is business-wide
+        // financial data an attendant isn't shown by design (see Home's
+        // role split). That boundary has to be enforced here, not just
+        // by the client never asking — an attendant's own authenticated
+        // session could otherwise query this collection directly and
+        // get full revenue regardless of what the UI shows. Create stays
+        // open to any active staff member: checking out a customer
+        // writes a sale, but the receipt screen shows the Sale object
+        // it's handed in memory, never reads this collection back — no
+        // attendant-facing screen needs read access at all.
+        allow read: if isActiveOwnerOf(businessId);
+        allow create: if isActiveStaffOf(businessId);
+        allow update, delete: if false;
+      }
+    }
+
+    // Nothing else exists at the top level. In particular: no path for a
+    // client to create a BUSINESS document itself — that stays a
+    // console-only, out-of-band, vendor-controlled action, by
+    // construction (there is no `allow create` for
+    // /businesses/{businessId} anywhere above). Adding STAFF to a
+    // business that already exists is the one thing a client can now do
+    // in-app, and only through the narrow, invite-gated path above.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
