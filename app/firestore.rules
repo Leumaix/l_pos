@@ -48,14 +48,14 @@ service cloud.firestore {
     }
 
     match /businesses/{businessId} {
-      // Business settings (name, gas rate, tank capacity): readable by
-      // active staff. Writable only in one narrow way: an active owner
-      // may update settings.gasTankCapacityKg — nothing else on this
+      // Business settings (name, tank capacity): readable by active
+      // staff. Writable only in one narrow way: an active owner may
+      // update settings.gasTankCapacityKg — nothing else on this
       // document, ever, from the client. That field only feeds the Stock
-      // screen's gauge, so it's safe to open up on its own; the gas RATE
-      // stays console-only (see Settings screen's doc comment for why —
-      // stock is tracked in units pegged to it, a rate change needs
-      // careful recomputation, not a plain field swap).
+      // screen's gauge, so it's safe to open up on its own. The gas RATE
+      // is a separate, owner-only editable field — but it lives on
+      // gasStock/current (below), not here, since changing it has to
+      // atomically recompute units too; see that match block.
       allow read: if isActiveStaffOf(businessId);
       allow update: if isActiveOwnerOf(businessId)
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['settings'])
@@ -139,7 +139,46 @@ service cloud.firestore {
 
       match /gasStock/{docId} {
         allow read: if isActiveStaffOf(businessId);
-        allow write: if isActiveStaffOf(businessId);
+
+        // First-write provisioning — matches status quo (addGasStock/
+        // deductGasStock use a merge-set, which needs create allowed for
+        // the very first write before the doc exists).
+        allow create: if isActiveStaffOf(businessId);
+
+        // Two deliberately separate update paths now that `rate` lives on
+        // this same doc — a single "any active staff can write anything"
+        // rule (what this used to be) would let an ordinary attendant set
+        // {rate: anything, units: anything} together with no consistency
+        // check at all, which is a much bigger hole than the owner-only
+        // risk this is actually guarding against.
+        //
+        // 1. Ordinary staff duty — a sale or restock delta. Touches ONLY
+        //    `units` (via FieldValue.increment); `rate` is never part of
+        //    this write. Any active staff member, same access as before
+        //    this field split.
+        allow update: if isActiveStaffOf(businessId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['units']);
+
+        // 2. Owner-only rate change. Touches `rate` AND `units` together
+        //    in the same write, and the units value must represent the
+        //    SAME physical kg the old units did, just re-expressed at the
+        //    new rate — not just "the owner can write any {rate, units}
+        //    pair", which would make "changing the rate" a backdoor to
+        //    silently inflate or deflate stock outside the normal
+        //    restock/sale trail. The ±0.01kg band absorbs the rounding
+        //    from gas_stock's changeRate()/unitsForKg() (round-to-nearest-
+        //    unit — a fraction of a naira), nothing more.
+        allow update: if isActiveOwnerOf(businessId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['rate', 'units'])
+          && request.resource.data.rate is number
+          && request.resource.data.rate > 0
+          && float(resource.data.units) / float(resource.data.rate)
+             <= float(request.resource.data.units) / float(request.resource.data.rate) + 0.01
+          && float(resource.data.units) / float(resource.data.rate)
+             >= float(request.resource.data.units) / float(request.resource.data.rate) - 0.01;
+
+        // No legitimate reason to ever delete the current stock doc.
+        allow delete: if false;
       }
 
       match /gasStockLedger/{entryId} {

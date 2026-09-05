@@ -37,7 +37,27 @@ abstract class InventoryRepository {
   /// sale) without waiting on the stream. Mirrors AuthRepository.currentUser.
   GasStock get currentGasStock;
 
+  Stream<GasRate> watchGasRate();
+
+  /// Synchronous access to the current gas rate — same "don't wait on the
+  /// stream" contract as [currentGasStock].
   GasRate get gasRate;
+
+  /// Owner-only. Atomically changes the rate AND recomputes units so the
+  /// PHYSICAL kg on hand is unchanged — only how many units it takes to
+  /// record it changes. See gas_stock's changeRate() for the exact math.
+  /// Also writes a 'rateChange' gasStockLedger entry (old rate, new rate,
+  /// preserved kg) in the same atomic operation, clearly distinct from a
+  /// sale or restock entry — so a later look at the ledger explains why
+  /// units jumped on some date, rather than looking like an unexplained
+  /// stock movement. [staffId]/[staffName] attribute that entry.
+  ///
+  /// Firestore rules independently re-derive and check this same
+  /// kg-preservation math server-side (not just trust the client) — see
+  /// firestore.rules' gasStock update rules — so this can never become a
+  /// backdoor to silently inflate or deflate stock outside the normal
+  /// restock/sale trail.
+  Future<void> changeGasRate(GasRate newRate, {required String staffId, required String staffName});
 
   Stream<List<Product>> watchProducts();
 
@@ -116,6 +136,9 @@ class FakeInventoryRepository implements InventoryRepository {
   GasStock _gasStock = const GasStock(63000); // 45kg on hand
   final _gasStockController = StreamController<GasStock>.broadcast();
 
+  GasRate _gasRate = const GasRate(1400);
+  final _gasRateController = StreamController<GasRate>.broadcast();
+
   List<Category> _categories = const [
     Category(id: 'cat-cylinders', name: 'Cylinders', sortOrder: 0),
     Category(id: 'cat-accessories', name: 'Accessories', sortOrder: 1),
@@ -187,7 +210,19 @@ class FakeInventoryRepository implements InventoryRepository {
   String _generateId(String prefix) => '$prefix-fake-${_nextId++}';
 
   @override
-  GasRate get gasRate => const GasRate(1400);
+  GasRate get gasRate => _gasRate;
+
+  @override
+  Stream<GasRate> watchGasRate() => replayLatest(() => _gasRate, _gasRateController.stream);
+
+  @override
+  Future<void> changeGasRate(GasRate newRate, {required String staffId, required String staffName}) async {
+    final result = changeRate(_gasStock, _gasRate, newRate);
+    _gasRate = newRate;
+    _gasStock = result.stock;
+    _gasRateController.add(_gasRate);
+    _gasStockController.add(_gasStock);
+  }
 
   @override
   GasStock get currentGasStock => _gasStock;

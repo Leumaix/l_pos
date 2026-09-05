@@ -113,6 +113,57 @@ void main() {
     });
   });
 
+  group('changeRate — preserves physical kg across a rate change', () {
+    test('rate increase: same kg, more units recorded', () {
+      // 28000 units @ 1400 = 20kg. At the new rate, 20kg costs more units.
+      final result = changeRate(const GasStock(28000), rate, const GasRate(1500));
+      expect(result.preservedKg, 20.0);
+      expect(result.stock.units, 30000); // 20kg * 1500
+    });
+
+    test('rate decrease: same kg, fewer units recorded', () {
+      final result = changeRate(const GasStock(28000), rate, const GasRate(1000));
+      expect(result.preservedKg, 20.0);
+      expect(result.stock.units, 20000); // 20kg * 1000
+    });
+
+    test('re-deriving kg at the new rate matches the preserved kg, within rounding', () {
+      // unitsForKg rounds to the nearest whole unit, so re-deriving kg from
+      // that rounded unit count can differ from the exact preserved kg by
+      // up to 0.5 unit worth — here, at most 0.5/2000 = 0.00025kg.
+      final result = changeRate(const GasStock(5000), rate, const GasRate(2000));
+      expect(kgRemaining(result.stock, const GasRate(2000)), closeTo(result.preservedKg, 0.001));
+    });
+
+    test('rounds by at most 1 unit versus the mathematically exact conversion', () {
+      // 5000 units @ 1400 = 3.571428... kg. At 900/kg that's 3214.285...
+      // units, which must round to 3214.
+      final result = changeRate(const GasStock(5000), rate, const GasRate(900));
+      expect(result.stock.units, 3214);
+    });
+
+    test('a no-op rate "change" (same rate) reproduces the same units, modulo rounding', () {
+      final result = changeRate(const GasStock(28000), rate, rate);
+      expect(result.stock.units, 28000);
+    });
+
+    test('preserves kg even when stock is already oversold (negative)', () {
+      final result = changeRate(const GasStock(-2800), rate, const GasRate(2000));
+      expect(result.preservedKg, -2.0);
+      expect(result.stock.units, -4000); // -2kg * 2000, still negative
+    });
+
+    test('a realistic sequence: restock, sell, then a rate change preserves what remains', () {
+      var stock = GasStock.zero;
+      stock = restock(stock, 20, rate).stock; // 28000
+      stock = sellByKg(stock, 5, rate).stock; // -7000 -> 21000 (15kg)
+
+      final result = changeRate(stock, rate, const GasRate(1600));
+      expect(result.preservedKg, 15.0);
+      expect(result.stock.units, 24000); // 15kg * 1600
+    });
+  });
+
   group('display conversions — derived, never stored', () {
     test('kgRemaining divides units by rate', () {
       expect(kgRemaining(const GasStock(28000), rate), 20.0);

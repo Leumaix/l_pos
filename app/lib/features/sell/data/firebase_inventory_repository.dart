@@ -16,19 +16,23 @@ import 'inventory_repository.dart';
 /// and business-settings repositories.
 ///
 /// Gas stock lives at a single doc, businesses/{id}/gasStock/current
-/// ({units: int}), with every deduction/addition also appending a
-/// businesses/{id}/gasStockLedger entry (append-only audit trail; see
-/// firestore.rules — create-only, no update/delete). Both writes go
-/// through one WriteBatch so the stock change and its ledger entry are
-/// never observable apart. gasRate stays hardcoded (const GasRate(1400))
-/// — deliberately out of scope; see the Settings screen's doc comment
-/// for why a rate change needs careful stock recomputation, not a plain
-/// field swap, and isn't being done here.
+/// ({units: int, rate: num}), with every deduction/addition also
+/// appending a businesses/{id}/gasStockLedger entry (append-only audit
+/// trail; see firestore.rules — create-only, no update/delete). Both
+/// writes go through one WriteBatch so the stock change and its ledger
+/// entry are never observable apart. Changing the rate itself
+/// (changeGasRate) similarly pairs a rate+units write with its own
+/// ledger entry, but through one runTransaction instead of a batch — it
+/// needs to READ the current rate/units first to compute the new units,
+/// which a batch can't do.
 class FirebaseInventoryRepository implements InventoryRepository {
   final FirebaseAuthRepository _firebaseAuth;
 
   GasStock _cachedGasStock = GasStock.zero;
   StreamSubscription<GasStock>? _gasStockSubscription;
+
+  GasRate _cachedGasRate = const GasRate(kDefaultGasRateNairaPerKg);
+  StreamSubscription<GasRate>? _gasRateSubscription;
 
   List<Product> _cachedProducts = const [];
   StreamSubscription<List<Product>>? _productsSubscription;
@@ -59,7 +63,60 @@ class FirebaseInventoryRepository implements InventoryRepository {
       _firestore.collection('businesses/$kBusinessId/gasStockLedger');
 
   @override
-  GasRate get gasRate => const GasRate(1400);
+  Stream<GasRate> watchGasRate() {
+    return _gasStockDoc.snapshots().map((doc) {
+      final rate = doc.data()?['rate'];
+      if (rate == null) return const GasRate(kDefaultGasRateNairaPerKg);
+      return GasRate(rate as num);
+    });
+  }
+
+  @override
+  GasRate get gasRate {
+    // Same lazily-started cache contract as currentGasStock.
+    _gasRateSubscription ??= watchGasRate().listen((rate) => _cachedGasRate = rate);
+    return _cachedGasRate;
+  }
+
+  @override
+  Future<void> changeGasRate(GasRate newRate, {required String staffId, required String staffName}) async {
+    await _firestore.runTransaction((transaction) async {
+      // All reads in a Firestore transaction must happen before any
+      // writes — this get() has to come first.
+      final snapshot = await transaction.get(_gasStockDoc);
+      final data = snapshot.data();
+      final oldRateValue = data?['rate'];
+      if (oldRateValue == null) {
+        // Should never happen in practice — the rate is seeded once,
+        // out-of-band, when a business is provisioned (see
+        // kDefaultGasRateNairaPerKg's doc comment). Surfacing this
+        // loudly rather than silently falling back to a default avoids
+        // ever computing a "preserved kg" against the wrong true rate.
+        throw StateError(
+          'gasStock/current has no rate field yet — it must be seeded before the rate can be changed.',
+        );
+      }
+      final oldRate = GasRate(oldRateValue as num);
+      final oldStock = GasStock((data?['units'] as num? ?? 0).toInt());
+      final result = changeRate(oldStock, oldRate, newRate);
+
+      transaction.set(_gasStockDoc, {
+        'rate': newRate.nairaPerKg,
+        'units': result.stock.units,
+      }, SetOptions(merge: true));
+      transaction.set(_gasStockLedgerCollection.doc(), {
+        'type': 'rateChange',
+        'unitsDelta': result.stock.units - oldStock.units,
+        'oldRate': oldRate.nairaPerKg,
+        'newRate': newRate.nairaPerKg,
+        'preservedKg': result.preservedKg,
+        'staffId': staffId,
+        'staffName': staffName,
+        'saleId': null,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    });
+  }
 
   @override
   Stream<GasStock> watchGasStock() {

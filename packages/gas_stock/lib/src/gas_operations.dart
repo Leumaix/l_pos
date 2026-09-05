@@ -68,6 +68,33 @@ GasSaleResult sellByKg(GasStock stock, num kg, GasRate rate) {
   );
 }
 
+/// The result of a rate change: the resulting stock (re-expressed at the
+/// new rate) and the physical kg that was preserved across the change.
+class GasRateChangeResult {
+  final GasStock stock;
+  final double preservedKg;
+
+  const GasRateChangeResult({required this.stock, required this.preservedKg});
+}
+
+/// Changes the rate WITHOUT changing the physical kg [stock] represents:
+/// first derives the current kg at [oldRate] (exactly what [kgRemaining]
+/// would show), then re-expresses that same kg as units at [newRate]. The
+/// kg value itself never changes — only how many units it takes to record
+/// it. Rounds the same way [sellByKg]/[restock] do (nearest whole unit via
+/// [unitsForKg]), so this can shift the recorded units by at most 1 unit
+/// (a fraction of a naira) versus the mathematically exact kg.
+///
+/// Works the same whether [stock] is currently non-negative or already
+/// oversold (negative) — kg preservation doesn't care about sign, it just
+/// carries whatever the current reconciliation state is over to the new
+/// rate unchanged.
+GasRateChangeResult changeRate(GasStock stock, GasRate oldRate, GasRate newRate) {
+  final kg = kgRemaining(stock, oldRate);
+  final newUnits = unitsForKg(kg, newRate);
+  return GasRateChangeResult(stock: GasStock(newUnits), preservedKg: kg);
+}
+
 /// Restock: adds `round(kgDelivered * rate)` units ON TOP OF whatever
 /// [stock] already holds. Never overwrites or replaces existing stock —
 /// leftover gas from before a delivery is preserved.

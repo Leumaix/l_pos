@@ -28,3 +28,13 @@ const kAndroidPackageName = 'com.leumade.pos';
 /// value via the Settings screen.
 const kDefaultGasTankCapacityKg = 100.0;
 
+/// Fallback used only during the brief initial-load window before the
+/// first `businesses/{kBusinessId}/gasStock/current.rate` snapshot
+/// arrives (or a read error) — matches the rate this whole app has been
+/// hardcoded to until now, so nothing silently changes for that window.
+/// Unlike capacity, there's no "unset" case in normal operation: rate
+/// must always exist in Firestore by the time any rate-change transaction
+/// runs, since the transaction needs a real current rate to preserve kg
+/// against — see FirebaseInventoryRepository.changeGasRate.
+const kDefaultGasRateNairaPerKg = 1400;
+

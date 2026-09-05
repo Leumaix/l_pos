@@ -176,7 +176,7 @@ class _AccountButton extends ConsumerWidget {
                         color: AppColors.textPrimary,
                       ),
                       title: const Text('Settings'),
-                      subtitle: const Text('Gas tank capacity'),
+                      subtitle: const Text('Gas tank capacity, gas rate'),
                       onTap: () {
                         Navigator.of(sheetContext).pop();
                         context.push('/settings');

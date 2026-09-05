@@ -8,23 +8,60 @@ import '../../../core/theme/app_text_styles.dart';
 import '../../../core/utils/currency.dart';
 import '../../../core/widgets/app_button.dart';
 import '../../../core/widgets/app_card.dart';
+import '../../sell/application/inventory_providers.dart';
 import '../application/business_providers.dart';
 import '../application/settings_controller.dart';
 
-/// Owner-only. Deliberately just the gas tank capacity for now — it only
-/// feeds the Stock screen's "% full" gauge, so it's low-risk to make
-/// editable on its own. The gas RATE stays console-only: it's pegged to
-/// how stock is tracked internally (in "units"), so changing it needs to
-/// correctly recompute existing stock to preserve the actual physical kg
-/// — its own task, with its own careful verification.
+/// Owner-only. Gas tank capacity only feeds the Stock screen's "% full"
+/// gauge, so it's a plain field swap. The gas RATE is more careful:
+/// stock is tracked internally in "units" pegged to it, so a rate change
+/// has to atomically recompute units to preserve the actual physical kg
+/// — see GasRateController.confirmRateChange and
+/// FirebaseInventoryRepository.changeGasRate.
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
+
+  Future<void> _handleSaveRate(BuildContext context, WidgetRef ref) async {
+    final controller = ref.read(gasRateControllerProvider.notifier);
+    final preview = controller.preparePreview();
+    if (preview == null) return; // invalid input — error already set
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Change gas rate?'),
+        content: Text(
+          'Changing rate from ${formatNaira(preview.oldRate.nairaPerKg.round())} to '
+          '${formatNaira(preview.newRate.nairaPerKg.round())}/kg — your current '
+          '${formatKg(preview.preservedKg)} in stock will still read as '
+          '${formatKg(preview.preservedKg)} after this change.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Change rate'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    await controller.confirmRateChange(preview.newRate);
+  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final currentCapacityKg = ref.watch(gasTankCapacityKgProvider);
     final state = ref.watch(settingsControllerProvider);
     final controller = ref.read(settingsControllerProvider.notifier);
+
+    final currentRate = ref.watch(gasRateProvider);
+    final rateState = ref.watch(gasRateControllerProvider);
+    final rateController = ref.read(gasRateControllerProvider.notifier);
 
     return Scaffold(
       appBar: AppBar(title: const Text('Settings'), backgroundColor: AppColors.background),
@@ -85,6 +122,66 @@ class SettingsScreen extends ConsumerWidget {
                         label: 'Save',
                         loading: state.submitting,
                         onPressed: state.capacityInput.trim().isEmpty ? null : controller.saveGasTankCapacity,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.xxl),
+                Text('Gas rate', style: AppTextStyles.headingSm),
+                const SizedBox(height: AppSpacing.sm),
+                Text(
+                  'Changes what a naira of gas is worth going forward. Stock on '
+                  'hand is automatically re-expressed at the new rate so the '
+                  'physical kg you have never changes — only how it\'s recorded.',
+                  style: AppTextStyles.secondary(AppTextStyles.bodyMd),
+                ),
+                const SizedBox(height: AppSpacing.lg),
+                AppCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              'Current rate',
+                              style: AppTextStyles.secondary(AppTextStyles.bodyMd),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          const SizedBox(width: AppSpacing.sm),
+                          Text(
+                            '${formatNaira(currentRate.nairaPerKg.round())}/kg',
+                            style: AppTextStyles.numericMd,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: AppSpacing.lg),
+                      Text('New rate (₦/kg)', style: AppTextStyles.labelMd),
+                      const SizedBox(height: AppSpacing.xs),
+                      TextField(
+                        enabled: !rateState.submitting,
+                        keyboardType: TextInputType.number,
+                        onChanged: rateController.setRateInput,
+                        decoration: InputDecoration(hintText: currentRate.nairaPerKg.round().toString()),
+                      ),
+                      const SizedBox(height: AppSpacing.md),
+                      SizedBox(
+                        height: 20,
+                        child: rateState.errorMessage != null
+                            ? Text(rateState.errorMessage!, style: AppTextStyles.danger(AppTextStyles.bodySm))
+                            : (rateState.justSaved
+                                  ? Text('Saved.', style: AppTextStyles.success(AppTextStyles.bodySm))
+                                  : null),
+                      ),
+                      const SizedBox(height: AppSpacing.md),
+                      AppButton(
+                        label: 'Save',
+                        loading: rateState.submitting,
+                        onPressed: rateState.rateInput.trim().isEmpty
+                            ? null
+                            : () => _handleSaveRate(context, ref),
                       ),
                     ],
                   ),

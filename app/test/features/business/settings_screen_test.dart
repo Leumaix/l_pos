@@ -4,6 +4,14 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:leumadepos/features/business/application/business_providers.dart';
 import 'package:leumadepos/features/business/data/business_repository.dart';
 import 'package:leumadepos/features/business/presentation/settings_screen.dart';
+import 'package:leumadepos/features/sell/application/inventory_providers.dart';
+import 'package:leumadepos/features/sell/data/inventory_repository.dart';
+
+/// The Gas rate card added below the capacity card means `find.byType`
+/// on the shared widgets (TextField, "Save") now matches two — these
+/// existing capacity tests deliberately scope to `.first` (capacity is
+/// always the first card) so they stay about capacity only. See
+/// settings_screen_gas_rate_test.dart for the rate card's own coverage.
 
 void main() {
   Future<void> settle(WidgetTester tester) async {
@@ -22,7 +30,10 @@ void main() {
 
       final business = FakeBusinessRepository(initialCapacityKg: 250);
       final container = ProviderContainer(
-        overrides: [businessRepositoryProvider.overrideWithValue(business)],
+        overrides: [
+          businessRepositoryProvider.overrideWithValue(business),
+          inventoryRepositoryProvider.overrideWithValue(FakeInventoryRepository()),
+        ],
       );
       addTearDown(container.dispose);
 
@@ -36,9 +47,9 @@ void main() {
 
       expect(find.text('250 kg'), findsOneWidget); // current capacity shown
 
-      await tester.enterText(find.byType(TextField), '600');
+      await tester.enterText(find.byType(TextField).first, '600');
       await tester.pump(const Duration(milliseconds: 10));
-      await tester.tap(find.text('Save'));
+      await tester.tap(find.text('Save').first);
       await settle(tester);
 
       expect(find.text('Saved.'), findsOneWidget);
@@ -56,7 +67,10 @@ void main() {
 
       final business = FakeBusinessRepository(initialCapacityKg: 250);
       final container = ProviderContainer(
-        overrides: [businessRepositoryProvider.overrideWithValue(business)],
+        overrides: [
+          businessRepositoryProvider.overrideWithValue(business),
+          inventoryRepositoryProvider.overrideWithValue(FakeInventoryRepository()),
+        ],
       );
       addTearDown(container.dispose);
 
@@ -68,9 +82,9 @@ void main() {
       );
       await settle(tester);
 
-      await tester.enterText(find.byType(TextField), '0');
+      await tester.enterText(find.byType(TextField).first, '0');
       await tester.pump(const Duration(milliseconds: 10));
-      await tester.tap(find.text('Save'));
+      await tester.tap(find.text('Save').first);
       await settle(tester);
 
       expect(find.text('Enter a valid capacity in kg.'), findsOneWidget);

@@ -4,11 +4,15 @@
 // invites_and_staff_rules.test.mjs for the emulator setup/run
 // instructions, identical here.
 //
-// Covers: any active staff (not just owner) can read/write the current
-// stock doc and append a ledger entry — selling and restocking gas are
-// ordinary staff duties, not owner-only, unlike categories/products.
-// Ledger update/delete stay hard-denied for everyone — it's an
-// append-only audit trail.
+// Covers: any active staff (not just owner) can read the current stock
+// doc, and can move ONLY `units` (a sale or restock delta) — selling and
+// restocking gas are ordinary staff duties, not owner-only, unlike
+// categories/products. Changing `rate` is owner-only, and only when the
+// `units` written in the same update is mathematically consistent with
+// the rate change (same physical kg, re-expressed at the new rate) —
+// see the "gas stock rate change" describe block below. Ledger
+// update/delete stay hard-denied for everyone — it's an append-only
+// audit trail.
 
 import { before, after, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -64,9 +68,22 @@ async function seedAttendant(businessId, uid) {
   });
 }
 
-async function seedGasStock(businessId, units) {
+async function seedOwner(businessId, uid) {
   await seed(async (db) => {
-    await setDoc(doc(db, `businesses/${businessId}/gasStock/current`), { units });
+    await setDoc(doc(db, `businesses/${businessId}/staff/${uid}`), {
+      name: 'Owner',
+      role: 'owner',
+      active: true,
+    });
+  });
+}
+
+async function seedGasStock(businessId, units, rate) {
+  await seed(async (db) => {
+    await setDoc(
+      doc(db, `businesses/${businessId}/gasStock/current`),
+      rate === undefined ? { units } : { units, rate },
+    );
   });
 }
 
@@ -105,6 +122,150 @@ describe('gas stock (/businesses/{businessId}/gasStock/current)', () => {
     const db = asUser('attendant-uid', 'attendant@example.com');
     await assertFails(getDoc(doc(db, `businesses/${BIZ}/gasStock/current`)));
     await assertFails(setDoc(doc(db, `businesses/${BIZ}/gasStock/current`), { units: 0 }));
+  });
+
+  it('DENIES an active attendant from touching `rate` at all, even alongside a units change', async () => {
+    await seedAttendant(BIZ, 'attendant-uid');
+    await seedGasStock(BIZ, 28000, 1400);
+
+    const db = asUser('attendant-uid', 'attendant@example.com');
+    // rate must actually differ from what's stored — writing back an
+    // identical value is a no-op diff (affectedKeys() would be empty),
+    // which wouldn't exercise this denial at all.
+    await assertFails(
+      setDoc(doc(db, `businesses/${BIZ}/gasStock/current`), { units: 30000, rate: 1500 }, { merge: true }),
+    );
+  });
+
+  it('DENIES an active attendant from dropping the `rate` field via a non-merge overwrite', async () => {
+    // The real client always uses a merge-set for sale/restock deltas, but
+    // rules can't trust client intent — a bare (non-merge) setDoc that
+    // omits `rate` entirely still counts as touching it (the field is
+    // removed), so this must be denied by the same units-only rule, not
+    // silently allowed to wipe the rate.
+    await seedAttendant(BIZ, 'attendant-uid');
+    await seedGasStock(BIZ, 28000, 1400);
+
+    const db = asUser('attendant-uid', 'attendant@example.com');
+    await assertFails(setDoc(doc(db, `businesses/${BIZ}/gasStock/current`), { units: 27000 }));
+  });
+
+  it('DENIES deleting the current stock doc, even as an owner', async () => {
+    await seedOwner(BIZ, 'owner-uid');
+    await seedGasStock(BIZ, 28000, 1400);
+
+    const db = asUser('owner-uid', 'owner@example.com');
+    await assertFails(deleteDoc(doc(db, `businesses/${BIZ}/gasStock/current`)));
+  });
+});
+
+describe('gas stock rate change (/businesses/{businessId}/gasStock/current, owner-only)', () => {
+  it('ALLOWS an active owner to change the rate when units is recomputed consistently (positive control)', async () => {
+    await seedOwner(BIZ, 'owner-uid');
+    await seedGasStock(BIZ, 28000, 1400); // 20kg at 1400/kg
+
+    const db = asUser('owner-uid', 'owner@example.com');
+    // Same 20kg, re-expressed at 1500/kg = 30000 units.
+    await assertSucceeds(
+      setDoc(doc(db, `businesses/${BIZ}/gasStock/current`), { units: 30000, rate: 1500 }, { merge: true }),
+    );
+
+    await seed(async (adminDb) => {
+      const snap = await getDoc(doc(adminDb, `businesses/${BIZ}/gasStock/current`));
+      assert.equal(snap.data().rate, 1500);
+      assert.equal(snap.data().units, 30000);
+    });
+  });
+
+  it('ALLOWS a units value within the small rounding tolerance of the exact conversion', async () => {
+    await seedOwner(BIZ, 'owner-uid');
+    await seedGasStock(BIZ, 28000, 1400); // 20kg
+
+    const db = asUser('owner-uid', 'owner@example.com');
+    // Exact conversion at 1500/kg is 30000 — 30001 is a rounding-sized nudge.
+    await assertSucceeds(
+      setDoc(doc(db, `businesses/${BIZ}/gasStock/current`), { units: 30001, rate: 1500 }, { merge: true }),
+    );
+  });
+
+  it('DENIES an owner from inflating units under cover of a rate change', async () => {
+    await seedOwner(BIZ, 'owner-uid');
+    await seedGasStock(BIZ, 28000, 1400); // 20kg
+
+    const db = asUser('owner-uid', 'owner@example.com');
+    // Exact conversion at 1500/kg is 30000 — 40000 would silently add ~6.7kg
+    // of stock that never actually arrived.
+    await assertFails(
+      setDoc(doc(db, `businesses/${BIZ}/gasStock/current`), { units: 40000, rate: 1500 }, { merge: true }),
+    );
+  });
+
+  it('DENIES an owner from deflating units under cover of a rate change', async () => {
+    await seedOwner(BIZ, 'owner-uid');
+    await seedGasStock(BIZ, 28000, 1400); // 20kg
+
+    const db = asUser('owner-uid', 'owner@example.com');
+    // Exact conversion at 1500/kg is 30000 — 10000 would silently erase
+    // most of the recorded stock.
+    await assertFails(
+      setDoc(doc(db, `businesses/${BIZ}/gasStock/current`), { units: 10000, rate: 1500 }, { merge: true }),
+    );
+  });
+
+  it('DENIES a non-owner (active attendant) from changing the rate even with mathematically consistent units', async () => {
+    await seedAttendant(BIZ, 'attendant-uid');
+    await seedGasStock(BIZ, 28000, 1400); // 20kg
+
+    const db = asUser('attendant-uid', 'attendant@example.com');
+    await assertFails(
+      setDoc(doc(db, `businesses/${BIZ}/gasStock/current`), { units: 30000, rate: 1500 }, { merge: true }),
+    );
+  });
+
+  it('DENIES an unauthenticated request from changing the rate', async () => {
+    await seedGasStock(BIZ, 28000, 1400);
+    const db = testEnv.unauthenticatedContext().firestore();
+    await assertFails(
+      setDoc(doc(db, `businesses/${BIZ}/gasStock/current`), { units: 30000, rate: 1500 }, { merge: true }),
+    );
+  });
+
+  it('DENIES an owner from setting a non-positive rate, even with the "consistent" units for it', async () => {
+    await seedOwner(BIZ, 'owner-uid');
+    await seedGasStock(BIZ, 28000, 1400); // 20kg
+
+    const db = asUser('owner-uid', 'owner@example.com');
+    await assertFails(
+      setDoc(doc(db, `businesses/${BIZ}/gasStock/current`), { units: 0, rate: 0 }, { merge: true }),
+    );
+    await assertFails(
+      setDoc(doc(db, `businesses/${BIZ}/gasStock/current`), { units: -20000, rate: -1400 }, { merge: true }),
+    );
+  });
+
+  it('DENIES an owner from changing the rate without recomputing units at all (units left stale)', async () => {
+    await seedOwner(BIZ, 'owner-uid');
+    await seedGasStock(BIZ, 28000, 1400); // 20kg
+
+    const db = asUser('owner-uid', 'owner@example.com');
+    // rate changes but units is untouched — no longer represents 20kg at
+    // the new rate, and this isn't a pure units-only write either (rate
+    // changed), so neither update rule should match.
+    await assertFails(setDoc(doc(db, `businesses/${BIZ}/gasStock/current`), { rate: 1500 }, { merge: true }));
+  });
+
+  it('DENIES an owner from changing a field other than rate/units in the same write', async () => {
+    await seedOwner(BIZ, 'owner-uid');
+    await seedGasStock(BIZ, 28000, 1400); // 20kg
+
+    const db = asUser('owner-uid', 'owner@example.com');
+    await assertFails(
+      setDoc(
+        doc(db, `businesses/${BIZ}/gasStock/current`),
+        { units: 30000, rate: 1500, note: 'sneaked in' },
+        { merge: true },
+      ),
+    );
   });
 });
 

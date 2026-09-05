@@ -3,20 +3,19 @@ import 'dart:async';
 import '../../../core/business_config.dart';
 import '../../../core/utils/replay_stream.dart';
 
-/// Business-wide settings an owner can edit in-app — deliberately just
-/// the gas tank capacity for now (see the doc comment on
-/// [updateGasTankCapacityKg] for why the gas RATE isn't part of this yet).
+/// Business-wide settings an owner can edit in-app — just the gas tank
+/// capacity. The gas RATE is also owner-editable, but lives on
+/// InventoryRepository instead (see InventoryRepository.changeGasRate):
+/// stock is tracked internally in "units" pegged to the rate, so a rate
+/// change has to atomically recompute existing stock alongside it, unlike
+/// this plain field swap.
 abstract class BusinessRepository {
   Stream<double> watchGasTankCapacityKg();
 
   /// Updates only `settings.gasTankCapacityKg` on the business doc — never
   /// the whole document. This purely feeds the Stock screen's "% full"
   /// gauge; it doesn't touch stock-tracking math at all, which is why it's
-  /// safe to make owner-editable on its own. The gas RATE is deliberately
-  /// NOT part of this: stock is tracked internally in "units" pegged to
-  /// the rate, so a rate change would need to correctly recompute existing
-  /// stock to preserve the actual physical kg — a separate, more careful
-  /// task, not folded into this one.
+  /// safe to make owner-editable on its own.
   Future<void> updateGasTankCapacityKg(double capacityKg);
 }
 
