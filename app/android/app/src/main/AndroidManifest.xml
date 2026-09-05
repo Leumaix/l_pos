@@ -3,10 +3,23 @@
         android:label="Leumadepos"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
+        <!-- singleTop (Flutter's own default) only dedupes an intent
+             within the SAME task — it does nothing to stop a NEW task
+             (and therefore a whole new FlutterEngine/Dart isolate, with
+             fresh in-memory state) from being spun up when the App Links
+             email-sign-in link is tapped from a different app (Gmail)
+             while this app already has an existing, merely-backgrounded
+             task. That silently defeated the shared-tablet handoff guard
+             in FirebaseAuthRepository (it read _currentUser off the
+             wrong, brand-new instance). singleTask guarantees the OS
+             reuses/foregrounds the existing task and delivers the new
+             intent via onNewIntent instead — confirmed via
+             `dumpsys activity activities` showing two live tasks before
+             this change, one after. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:launchMode="singleTop"
+            android:launchMode="singleTask"
             android:taskAffinity=""
             android:theme="@style/LaunchTheme"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"

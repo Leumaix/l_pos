@@ -90,10 +90,10 @@ class FirebaseAuthRepository implements AuthRepository {
   }
 
   String _appNameFor(String email) {
-    final sanitized = email
-        .trim()
-        .toLowerCase()
-        .replaceAll(RegExp(r'[^a-z0-9]'), '_');
+    final sanitized = email.trim().toLowerCase().replaceAll(
+      RegExp(r'[^a-z0-9]'),
+      '_',
+    );
     return 'staff_$sanitized';
   }
 
@@ -152,23 +152,34 @@ class FirebaseAuthRepository implements AuthRepository {
     // Diagnostic only — lets a debug session correlate how long between
     // send and the eventual tap (e.g. to spot a code consumed by an
     // email provider's link-scanner before the real user ever taps it).
-    debugPrint('sendVerificationLink: sent at ${DateTime.now().toIso8601String()} for $normalizedEmail');
+    debugPrint(
+      'sendVerificationLink: sent at ${DateTime.now().toIso8601String()} for $normalizedEmail',
+    );
   }
 
   @override
-  Future<String?> pendingVerificationEmail() => _store.getPendingVerificationEmail();
+  Future<String?> pendingVerificationEmail() =>
+      _store.getPendingVerificationEmail();
 
   @override
-  Future<void> completeEmailLinkSignIn({required String email, required String emailLink}) async {
+  Future<void> completeEmailLinkSignIn({
+    required String email,
+    required String emailLink,
+  }) async {
     final normalizedEmail = email.trim().toLowerCase();
     final app = await _appFor(_appNameFor(normalizedEmail));
     final auth = fb_auth.FirebaseAuth.instanceFor(app: app);
 
-    debugPrint('completeEmailLinkSignIn: attempting at ${DateTime.now().toIso8601String()} for $normalizedEmail\n  link=$emailLink');
+    debugPrint(
+      'completeEmailLinkSignIn: attempting at ${DateTime.now().toIso8601String()} for $normalizedEmail\n  link=$emailLink',
+    );
     if (!auth.isSignInWithEmailLink(emailLink)) {
       throw const InvalidCredentialsException();
     }
-    final credential = await auth.signInWithEmailLink(email: normalizedEmail, emailLink: emailLink);
+    final credential = await auth.signInWithEmailLink(
+      email: normalizedEmail,
+      emailLink: emailLink,
+    );
     final fbUser = credential.user;
     if (fbUser == null) {
       throw const InvalidCredentialsException();
@@ -186,7 +197,10 @@ class FirebaseAuthRepository implements AuthRepository {
   }
 
   @override
-  Future<SetPinResult> setPinForVerifiedDevice({required String email, required String pin}) async {
+  Future<SetPinResult> setPinForVerifiedDevice({
+    required String email,
+    required String pin,
+  }) async {
     final normalizedEmail = email.trim().toLowerCase();
     final appName = _appNameFor(normalizedEmail);
     final app = await _appFor(appName);
@@ -201,10 +215,19 @@ class FirebaseAuthRepository implements AuthRepository {
     }
 
     final pinHash = await hashPin(pin);
-    final appUser = await _loadStaffDoc(app: app, uid: fbUser.uid, email: normalizedEmail);
+    final appUser = await _loadStaffDoc(
+      app: app,
+      uid: fbUser.uid,
+      email: normalizedEmail,
+    );
 
     await _store.save(
-      StaffDeviceCredential(email: normalizedEmail, uid: fbUser.uid, appName: appName, pinHash: pinHash),
+      StaffDeviceCredential(
+        email: normalizedEmail,
+        uid: fbUser.uid,
+        appName: appName,
+        pinHash: pinHash,
+      ),
     );
     await _store.setPendingVerificationEmail(null);
 
@@ -219,11 +242,18 @@ class FirebaseAuthRepository implements AuthRepository {
       _controller.add(_currentUser);
       return SetPinResult(staffMember: appUser, activated: true);
     }
-    return SetPinResult(staffMember: appUser, activated: false, currentActiveUser: _currentUser);
+    return SetPinResult(
+      staffMember: appUser,
+      activated: false,
+      currentActiveUser: _currentUser,
+    );
   }
 
   @override
-  Future<AppUser> signInWithEmailAndPin({required String email, required String pin}) async {
+  Future<AppUser> signInWithEmailAndPin({
+    required String email,
+    required String pin,
+  }) async {
     final normalizedEmail = email.trim().toLowerCase();
     final credential = await _store.get(normalizedEmail);
     if (credential == null) {
@@ -271,7 +301,11 @@ class FirebaseAuthRepository implements AuthRepository {
       throw const DeviceVerificationRequiredException();
     }
 
-    final appUser = await _loadStaffDoc(app: app, uid: fbUser.uid, email: normalizedEmail);
+    final appUser = await _loadStaffDoc(
+      app: app,
+      uid: fbUser.uid,
+      email: normalizedEmail,
+    );
     _currentUser = appUser;
     _controller.add(_currentUser);
     return appUser;
@@ -323,7 +357,9 @@ class FirebaseAuthRepository implements AuthRepository {
 
     final name = inviteData['name'] as String;
     final role = inviteData['role'] as String;
-    final idTokenResult = await fb_auth.FirebaseAuth.instanceFor(app: app).currentUser?.getIdTokenResult();
+    final idTokenResult = await fb_auth.FirebaseAuth.instanceFor(app: app)
+        .currentUser
+        ?.getIdTokenResult();
     debugPrint(
       '_loadStaffDoc: about to batch-commit staff doc for uid=$uid role=$role — '
       'token email=${idTokenResult?.claims?['email']} '
