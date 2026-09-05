@@ -7,12 +7,15 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_text_styles.dart';
 import '../../../core/utils/currency.dart';
+import '../../../core/widgets/app_button.dart';
 import '../../../core/widgets/app_card.dart';
 import '../../../core/widgets/stat_card.dart';
 import '../../auth/application/auth_providers.dart';
 import '../../auth/application/verification_controller.dart';
 import '../../auth/data/auth_repository.dart';
 import '../../business/application/business_providers.dart';
+import '../../shift/application/shift_providers.dart';
+import '../../shift/domain/shift.dart';
 import '../application/dashboard_providers.dart';
 
 class HomeScreen extends ConsumerWidget {
@@ -35,6 +38,7 @@ class HomeScreen extends ConsumerWidget {
     final isOwner = user?.role == 'owner';
     final businessName = ref.watch(businessNameProvider);
     final summary = ref.watch(dashboardSummaryProvider);
+    final shiftAsync = ref.watch(currentShiftProvider);
 
     return Scaffold(
       body: SafeArea(
@@ -62,6 +66,12 @@ class HomeScreen extends ConsumerWidget {
                 ),
                 const SizedBox(height: AppSpacing.xs),
                 Text(user?.name ?? '—', style: AppTextStyles.headingLg),
+                const SizedBox(height: AppSpacing.xl),
+                shiftAsync.when(
+                  data: (shift) => _ShiftBanner(shift: shift),
+                  loading: () => const SizedBox.shrink(),
+                  error: (err, _) => const SizedBox.shrink(),
+                ),
                 const SizedBox(height: AppSpacing.xl),
                 summary.when(
                   data: (data) => _DashboardBody(
@@ -97,11 +107,76 @@ class HomeScreen extends ConsumerWidget {
   }
 }
 
-/// The only place a shift starts or ends: sign out (so the router lands
-/// everyone back on Login), or start a second staff member's one-time
-/// device verification without disturbing this session — see
-/// FirebaseAuthRepository's doc comment on why setPinForVerifiedDevice
-/// won't auto-switch the active session on its own.
+/// The business-day cash-drawer banner — open/closed by ANY active staff
+/// member, not owner-only, and shown to both roles (unlike the revenue
+/// figures below it, which stay owner-only). Not to be confused with the
+/// informal "shift" used elsewhere in this file's own prose (a staff
+/// member's signed-in session, e.g. _AccountButton's doc comment below)
+/// — this is the OpenShift/ClosedShift business-day concept.
+class _ShiftBanner extends StatelessWidget {
+  final OpenShift? shift;
+
+  const _ShiftBanner({required this.shift});
+
+  @override
+  Widget build(BuildContext context) {
+    final shift = this.shift;
+    if (shift == null) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(AppSpacing.lg),
+        decoration: BoxDecoration(
+          color: AppColors.dangerBg,
+          borderRadius: BorderRadius.circular(AppSpacing.cardRadius),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('The day hasn\'t been opened yet', style: AppTextStyles.headingSm),
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              'Open the day to declare a starting cash float before selling.',
+              style: AppTextStyles.secondary(AppTextStyles.bodyMd),
+            ),
+            const SizedBox(height: AppSpacing.md),
+            AppButton(label: 'Open the day', onPressed: () => context.push('/open-day')),
+          ],
+        ),
+      );
+    }
+
+    return AppCard(
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Day is open', style: AppTextStyles.secondary(AppTextStyles.bodySm)),
+                const SizedBox(height: AppSpacing.xs),
+                Text(formatNaira(shift.expectedCashNaira), style: AppTextStyles.numericMd),
+                Text('expected in drawer', style: AppTextStyles.secondary(AppTextStyles.bodySm)),
+              ],
+            ),
+          ),
+          const SizedBox(width: AppSpacing.sm),
+          OutlinedButton(
+            onPressed: () => context.push('/close-day'),
+            child: const Text('Close day'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The only place a STAFF SESSION (not the shift banner above) starts or
+/// ends: sign out (so the router lands everyone back on Login), or start
+/// a second staff member's one-time device verification without
+/// disturbing this session — see FirebaseAuthRepository's doc comment on
+/// why setPinForVerifiedDevice won't auto-switch the active session on
+/// its own.
 class _AccountButton extends ConsumerWidget {
   final AppUser? user;
 

@@ -47,6 +47,19 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/businesses/$(businessId)/staff/$(request.auth.uid)).data.role == 'owner';
     }
 
+    // Used only by shiftState/current's delete rule (closing a shift) —
+    // a delete has no request.resource.data to carry a pointer to the
+    // paired shiftHistory record the way an update can, so the pointer
+    // (plannedHistoryId) and the values to check it against are passed
+    // in explicitly from resource.data (the doc's state before deletion).
+    // One getAfter() call, reused via `let`, rather than two identical
+    // calls inline.
+    function shiftCloseIsPaired(businessId, plannedHistoryId, openingFloatNaira, cashTotalNaira) {
+      let historyDoc = getAfter(/databases/$(database)/documents/businesses/$(businessId)/shiftHistory/$(plannedHistoryId));
+      return historyDoc.data.closedAt is timestamp
+        && historyDoc.data.expectedCashNaira == openingFloatNaira + cashTotalNaira;
+    }
+
     match /businesses/{businessId} {
       // Business settings (name, tank capacity): readable by active
       // staff. Writable only in one narrow way: an active owner may
@@ -305,6 +318,85 @@ service cloud.firestore {
         // writes a sale, but the receipt screen shows the Sale object
         // it's handed in memory, never reads this collection back — no
         // attendant-facing screen needs read access at all.
+        //
+        // The exists() check is the real, server-side enforcement of
+        // "no ringing up a sale before the day is opened" — see
+        // shiftState/current below. CheckoutController/
+        // FirebaseCheckoutRepository check this too, for a clean client-
+        // side error instead of a raw permission-denied, but this is
+        // what actually can't be bypassed.
+        allow read: if isActiveOwnerOf(businessId);
+        allow create: if isActiveStaffOf(businessId)
+          && exists(/databases/$(database)/documents/businesses/$(businessId)/shiftState/current);
+        allow update, delete: if false;
+      }
+
+      match /shiftState/{docId} {
+        // A business day's cash-drawer tracking, scoped to the whole
+        // business (not per staff member) — opened once, closed once,
+        // regardless of how many staff hand the shared tablet off to
+        // each other in between. Any active staff member can open or
+        // close, matching how selling/restocking gas is an ordinary
+        // staff duty, not owner-only.
+        //
+        // Existence IS "a shift is open" — no separate status field.
+        // That's what /sales create's exists() check above relies on,
+        // and it's also what makes "block opening a new day until the
+        // stale one is closed" fall out of Firestore's own create-vs-
+        // update classification for free: `allow create` below only
+        // ever matches a write against a doc that doesn't already exist,
+        // so a second open attempt while one is live has no matching
+        // rule at all — no separate staleness check needed.
+        allow read: if isActiveStaffOf(businessId);
+        allow create: if isActiveStaffOf(businessId)
+          && request.resource.data.openingFloatNaira is number
+          && request.resource.data.openingFloatNaira >= 0;
+
+        // Sale-time totals increment ONLY — never openingFloat/openedBy/
+        // plannedHistoryId/etc. This is the one write
+        // FirebaseCheckoutRepository.commitSale performs mid-transaction.
+        allow update: if isActiveStaffOf(businessId)
+          && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['cashTotalNaira', 'cardTotalNaira', 'transferTotalNaira', 'creditTotalNaira', 'salesCount']);
+
+        // Closing a shift deletes this doc — the ONLY way "a shift is
+        // open" ever becomes false again. This is a real data-loss risk
+        // done wrong (the whole day's running totals gone with nothing
+        // to reconstruct), unlike the gas-stock/product-delta boundary
+        // this file otherwise draws — so unlike those, this doesn't just
+        // trust the client to pair the delete with an honest archive.
+        //
+        // A delete has no request.resource.data (no resulting document)
+        // to carry a pointer to the paired shiftHistory doc the way an
+        // update can — see /customers' lastTransactionId pattern above.
+        // So the pointer has to already be sitting on the doc being
+        // deleted: plannedHistoryId, minted and written at open time
+        // (see FirebaseShiftRepository.openDay). getAfter() then checks
+        // that EXACT id actually gained a real closed-shift record, in
+        // this same transaction — not just that some doc somewhere in
+        // shiftHistory was created. And since openingFloatNaira/
+        // cashTotalNaira are sitting right here on resource.data (no
+        // unrelated-collection history to recompute, unlike gas/product
+        // deltas), this also checks the archived record's expectedCash
+        // is arithmetically honest, not fabricated — countedCashNaira/
+        // varianceNaira are left unverified, same trust boundary as any
+        // ledger amountNaira (only the person who counted the drawer
+        // knows that number).
+        allow delete: if isActiveStaffOf(businessId)
+          && shiftCloseIsPaired(
+               businessId,
+               resource.data.plannedHistoryId,
+               resource.data.openingFloatNaira,
+               resource.data.cashTotalNaira
+             );
+      }
+
+      match /shiftHistory/{shiftId} {
+        // Append-only archive of closed shifts. Read is owner-only —
+        // same boundary as /sales: per-method totals for a whole
+        // business day is exactly the kind of revenue figure Home's
+        // role split already keeps from attendants, even though any
+        // staff member can be the one who CLOSES a shift (create).
         allow read: if isActiveOwnerOf(businessId);
         allow create: if isActiveStaffOf(businessId);
         allow update, delete: if false;

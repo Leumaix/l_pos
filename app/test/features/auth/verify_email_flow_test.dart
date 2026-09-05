@@ -14,6 +14,8 @@ import 'package:leumadepos/features/sell/application/inventory_providers.dart';
 import 'package:leumadepos/features/sell/application/sales_providers.dart';
 import 'package:leumadepos/features/sell/data/inventory_repository.dart';
 import 'package:leumadepos/features/sell/data/sales_repository.dart';
+import 'package:leumadepos/features/shift/application/shift_providers.dart';
+import 'package:leumadepos/features/shift/data/shift_repository.dart';
 
 /// Exercises the first-time-verification/switcher flow end to end through
 /// real widgets and the real VerificationController — everything EXCEPT
@@ -29,6 +31,7 @@ Widget _appWithFakeAuth() {
       inventoryRepositoryProvider.overrideWithValue(FakeInventoryRepository()),
       salesRepositoryProvider.overrideWithValue(FakeSalesRepository()),
       customerRepositoryProvider.overrideWithValue(FakeCustomerRepository()),
+      shiftRepositoryProvider.overrideWithValue(FakeShiftRepository()),
     ],
     child: const LeumadeposApp(),
   );

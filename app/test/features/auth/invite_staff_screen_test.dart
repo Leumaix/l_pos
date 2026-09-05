@@ -12,6 +12,8 @@ import 'package:leumadepos/features/sell/application/inventory_providers.dart';
 import 'package:leumadepos/features/sell/application/sales_providers.dart';
 import 'package:leumadepos/features/sell/data/inventory_repository.dart';
 import 'package:leumadepos/features/sell/data/sales_repository.dart';
+import 'package:leumadepos/features/shift/application/shift_providers.dart';
+import 'package:leumadepos/features/shift/data/shift_repository.dart';
 
 /// The security half of "add staff in-app" (who can create/read invites,
 /// who can create a staff doc from one, role can't be self-chosen) is
@@ -28,6 +30,7 @@ Widget _appWithFakes({required FakeStaffInviteRepository invites}) {
       inventoryRepositoryProvider.overrideWithValue(FakeInventoryRepository()),
       salesRepositoryProvider.overrideWithValue(FakeSalesRepository()),
       customerRepositoryProvider.overrideWithValue(FakeCustomerRepository()),
+      shiftRepositoryProvider.overrideWithValue(FakeShiftRepository()),
     ],
     child: const LeumadeposApp(),
   );

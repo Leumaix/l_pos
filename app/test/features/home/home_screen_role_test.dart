@@ -12,6 +12,8 @@ import 'package:leumadepos/features/sell/application/inventory_providers.dart';
 import 'package:leumadepos/features/sell/application/sales_providers.dart';
 import 'package:leumadepos/features/sell/data/inventory_repository.dart';
 import 'package:leumadepos/features/sell/data/sales_repository.dart';
+import 'package:leumadepos/features/shift/application/shift_providers.dart';
+import 'package:leumadepos/features/shift/data/shift_repository.dart';
 
 /// Proves the owner/attendant split actually holds end to end — not just
 /// that Home leaves a tile off, but that an attendant is genuinely
@@ -42,6 +44,7 @@ void main() {
         inventoryRepositoryProvider.overrideWithValue(FakeInventoryRepository()),
         salesRepositoryProvider.overrideWithValue(FakeSalesRepository()),
         customerRepositoryProvider.overrideWithValue(FakeCustomerRepository()),
+        shiftRepositoryProvider.overrideWithValue(FakeShiftRepository()),
       ],
       child: const LeumadeposApp(),
     );
@@ -125,6 +128,7 @@ void main() {
             inventoryRepositoryProvider.overrideWithValue(FakeInventoryRepository()),
             salesRepositoryProvider.overrideWithValue(FakeSalesRepository()),
             customerRepositoryProvider.overrideWithValue(FakeCustomerRepository()),
+            shiftRepositoryProvider.overrideWithValue(FakeShiftRepository()),
           ],
           child: const LeumadeposApp(),
         ),

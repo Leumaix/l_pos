@@ -93,14 +93,33 @@ async function seedCustomer(businessId, customerId, balance) {
   });
 }
 
+async function seedOpenShift(businessId, overrides = {}) {
+  await seed(async (db) => {
+    await setDoc(doc(db, `businesses/${businessId}/shiftState/current`), {
+      openingFloatNaira: 10000,
+      openedByStaffId: 'someone',
+      openedByStaffName: 'Someone',
+      openedAt: new Date(),
+      cashTotalNaira: 0,
+      cardTotalNaira: 0,
+      transferTotalNaira: 0,
+      creditTotalNaira: 0,
+      salesCount: 0,
+      plannedHistoryId: 'hist-1',
+      ...overrides,
+    });
+  });
+}
+
 function asUser(uid, email) {
   return testEnv.authenticatedContext(uid, { email, email_verified: true }).firestore();
 }
 
 describe('checkout commit — the real transaction FirebaseCheckoutRepository.commitSale performs', () => {
-  it('ALLOWS a cash sale (sale record + product stockCount decrement) as one transaction', async () => {
+  it('ALLOWS a cash sale (sale record + product stockCount decrement + shift totals increment) as one transaction', async () => {
     await seedAttendant(BIZ, 'attendant-uid');
     await seedProduct(BIZ, 'prod-1', 9);
+    await seedOpenShift(BIZ);
 
     const db = asUser('attendant-uid', 'attendant@example.com');
     await assertSucceeds(
@@ -120,20 +139,33 @@ describe('checkout commit — the real transaction FirebaseCheckoutRepository.co
           createdAt: new Date().toISOString(),
         });
         transaction.update(doc(db, `businesses/${BIZ}/products/prod-1`), { stockCount: 8 });
+        // The shift-time totals write FirebaseCheckoutRepository.commitSale
+        // now performs alongside every other mutation in this one
+        // transaction — see FirebaseInventoryRepository/checkout's doc
+        // comments and shift_rules.test.mjs for shiftState/current's own
+        // rules coverage.
+        transaction.update(doc(db, `businesses/${BIZ}/shiftState/current`), {
+          cashTotalNaira: 15000,
+          salesCount: 1,
+        });
       }),
     );
 
     await seed(async (adminDb) => {
       const snap = await getDoc(doc(adminDb, `businesses/${BIZ}/products/prod-1`));
       assert.equal(snap.data().stockCount, 8);
+      const shiftSnap = await getDoc(doc(adminDb, `businesses/${BIZ}/shiftState/current`));
+      assert.equal(shiftSnap.data().cashTotalNaira, 15000);
+      assert.equal(shiftSnap.data().salesCount, 1);
     });
   });
 
-  it('ALLOWS a full mixed sale — sale + gas stock/ledger + product decrement + customer balance/transaction — as one transaction', async () => {
+  it('ALLOWS a full mixed sale — sale + gas stock/ledger + product decrement + customer balance/transaction + shift totals — as one transaction', async () => {
     await seedAttendant(BIZ, 'attendant-uid');
     await seedProduct(BIZ, 'prod-1', 9);
     await seedGasStock(BIZ, 840000);
     await seedCustomer(BIZ, 'cust-1', 2000);
+    await seedOpenShift(BIZ);
 
     const db = asUser('attendant-uid', 'attendant@example.com');
     await assertSucceeds(
@@ -180,13 +212,55 @@ describe('checkout commit — the real transaction FirebaseCheckoutRepository.co
           createdAt: new Date().toISOString(),
           saleId: 'sale-2',
         });
+        // A customerAccount sale increments creditTotalNaira, not
+        // cashTotalNaira — no physical cash entered the drawer.
+        transaction.update(doc(db, `businesses/${BIZ}/shiftState/current`), {
+          creditTotalNaira: 22000,
+          salesCount: 1,
+        });
       }),
     );
+  });
+
+  it('DENIES the whole transaction when no shift is open — an otherwise entirely valid sale, blocked purely '
+    + 'by the missing shiftState/current, the real server-side enforcement of "open the day first"', async () => {
+    await seedAttendant(BIZ, 'attendant-uid');
+    await seedProduct(BIZ, 'prod-1', 9);
+    // No seedOpenShift() call.
+
+    const db = asUser('attendant-uid', 'attendant@example.com');
+    await assertFails(
+      runTransaction(db, async (transaction) => {
+        transaction.set(doc(db, `businesses/${BIZ}/sales/sale-no-shift`), {
+          receiptNumber: 'sale-no-shift',
+          items: [],
+          subtotal: 15000,
+          total: 15000,
+          method: 'cash',
+          cashGiven: 15000,
+          changeGiven: 0,
+          customerId: null,
+          customerName: null,
+          staffId: 'attendant-uid',
+          staffName: 'Attendant',
+          createdAt: new Date().toISOString(),
+        });
+        transaction.update(doc(db, `businesses/${BIZ}/products/prod-1`), { stockCount: 8 });
+      }),
+    );
+
+    await seed(async (adminDb) => {
+      const saleSnap = await getDoc(doc(adminDb, `businesses/${BIZ}/sales/sale-no-shift`));
+      assert.equal(saleSnap.exists(), false); // never partially applied
+      const productSnap = await getDoc(doc(adminDb, `businesses/${BIZ}/products/prod-1`));
+      assert.equal(productSnap.data().stockCount, 9); // untouched
+    });
   });
 
   it('DENIES the whole transaction if a product line would take stockCount negative — the oversell guard', async () => {
     await seedAttendant(BIZ, 'attendant-uid');
     await seedProduct(BIZ, 'prod-1', 1); // only 1 left
+    await seedOpenShift(BIZ); // isolates the oversell guard as the cause, not shift-gating
 
     const db = asUser('attendant-uid', 'attendant@example.com');
     await assertFails(
@@ -225,6 +299,7 @@ describe('checkout commit — the real transaction FirebaseCheckoutRepository.co
     async () => {
       await seedAttendant(BIZ, 'attendant-uid');
       await seedProduct(BIZ, 'prod-1', 9);
+      await seedOpenShift(BIZ); // isolates the price-smuggling guard as the cause
 
       const db = asUser('attendant-uid', 'attendant@example.com');
       await assertFails(
@@ -260,6 +335,7 @@ describe('checkout commit — the real transaction FirebaseCheckoutRepository.co
   it('DENIES the whole transaction for a staff member of a DIFFERENT business', async () => {
     await seedAttendant(OTHER_BIZ, 'attendant-uid');
     await seedProduct(BIZ, 'prod-1', 9);
+    await seedOpenShift(BIZ); // isolates the cross-business guard as the cause
 
     const db = asUser('attendant-uid', 'attendant@example.com');
     await assertFails(

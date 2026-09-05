@@ -6,8 +6,10 @@
 // Covers: read is owner-only (revenue is business-wide financial data an
 // attendant isn't shown by design — see Home's owner/attendant split);
 // create stays open to any active staff member (checkout writes a sale
-// regardless of role); update/delete are denied for everyone, always —
-// a sale is immutable once recorded.
+// regardless of role) but ONLY while a shift is open (see
+// shiftState/current in shift_rules.test.mjs for the full shift rules);
+// update/delete are denied for everyone, always — a sale is immutable
+// once recorded.
 
 import { before, after, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -86,6 +88,23 @@ async function seedSale(businessId, saleId) {
   });
 }
 
+async function seedOpenShift(businessId) {
+  await seed(async (db) => {
+    await setDoc(doc(db, `businesses/${businessId}/shiftState/current`), {
+      openingFloatNaira: 10000,
+      openedByStaffId: 'someone',
+      openedByStaffName: 'Someone',
+      openedAt: new Date(),
+      cashTotalNaira: 0,
+      cardTotalNaira: 0,
+      transferTotalNaira: 0,
+      creditTotalNaira: 0,
+      salesCount: 0,
+      plannedHistoryId: 'hist-1',
+    });
+  });
+}
+
 function asUser(uid, email) {
   return testEnv.authenticatedContext(uid, { email, email_verified: true }).firestore();
 }
@@ -124,8 +143,9 @@ describe('sales (/businesses/{businessId}/sales/{saleId})', () => {
     await assertFails(getDoc(doc(db, `businesses/${BIZ}/sales/sale-1`)));
   });
 
-  it('ALLOWS an active attendant to create a sale (checkout works regardless of role)', async () => {
+  it('ALLOWS an active attendant to create a sale while a shift is open (checkout works regardless of role)', async () => {
     await seedAttendant(BIZ, 'attendant-uid');
+    await seedOpenShift(BIZ);
 
     const db = asUser('attendant-uid', 'attendant@example.com');
     await assertSucceeds(
@@ -136,13 +156,40 @@ describe('sales (/businesses/{businessId}/sales/{saleId})', () => {
     );
   });
 
-  it('ALLOWS an active owner to create a sale too', async () => {
+  it('ALLOWS an active owner to create a sale too, while a shift is open', async () => {
     await seedOwner(BIZ, 'owner-uid');
+    await seedOpenShift(BIZ);
 
     const db = asUser('owner-uid', 'owner@example.com');
     await assertSucceeds(
       setDoc(doc(db, `businesses/${BIZ}/sales/sale-3`), {
         totalNaira: 8000,
+        createdAt: new Date().toISOString(),
+      }),
+    );
+  });
+
+  it('DENIES creating a sale when no shift is open — the actual server-side enforcement of '
+    + '"open the day first", not just a client-side check', async () => {
+    await seedAttendant(BIZ, 'attendant-uid');
+    // No seedOpenShift() call — shiftState/current doesn't exist.
+
+    const db = asUser('attendant-uid', 'attendant@example.com');
+    await assertFails(
+      setDoc(doc(db, `businesses/${BIZ}/sales/sale-4`), {
+        totalNaira: 12000,
+        createdAt: new Date().toISOString(),
+      }),
+    );
+  });
+
+  it('DENIES creating a sale even for an owner when no shift is open', async () => {
+    await seedOwner(BIZ, 'owner-uid');
+
+    const db = asUser('owner-uid', 'owner@example.com');
+    await assertFails(
+      setDoc(doc(db, `businesses/${BIZ}/sales/sale-5`), {
+        totalNaira: 12000,
         createdAt: new Date().toISOString(),
       }),
     );

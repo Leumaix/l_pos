@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -13,6 +14,9 @@ import '../features/reports/presentation/reports_screen.dart';
 import '../features/sell/presentation/payment_screen.dart';
 import '../features/sell/presentation/receipt_screen.dart';
 import '../features/sell/presentation/sell_screen.dart';
+import '../features/shift/application/shift_providers.dart';
+import '../features/shift/presentation/close_day_screen.dart';
+import '../features/shift/presentation/open_day_screen.dart';
 import '../features/stock/presentation/manage_catalog_screen.dart';
 import '../features/stock/presentation/manage_category_products_screen.dart';
 import '../features/stock/presentation/restock_screen.dart';
@@ -22,10 +26,17 @@ import 'go_router_refresh_stream.dart';
 
 final routerProvider = Provider<GoRouter>((ref) {
   final authRepository = ref.watch(authRepositoryProvider);
+  final shiftRepository = ref.watch(shiftRepositoryProvider);
 
   return GoRouter(
     initialLocation: '/login',
-    refreshListenable: GoRouterRefreshStream(authRepository.authStateChanges()),
+    // Re-evaluates redirect on either an auth-state change OR a shift
+    // open/close (e.g. someone closing the day on a second device while
+    // this one still has Sell mounted) — not just at the next navigation.
+    refreshListenable: Listenable.merge([
+      GoRouterRefreshStream(authRepository.authStateChanges()),
+      GoRouterRefreshStream(shiftRepository.watchCurrentShift()),
+    ]),
     redirect: (context, state) {
       final signedIn = authRepository.currentUser != null;
       final onLogin = state.matchedLocation == '/login';
@@ -53,6 +64,15 @@ final routerProvider = Provider<GoRouter>((ref) {
           state.matchedLocation.startsWith('/stock') || state.matchedLocation.startsWith('/reports');
       if (signedIn && !isOwner && onOwnerOnlyRoute) return '/home';
 
+      // No ringing up a sale before the day is opened — mirrors
+      // firestore.rules' exists(shiftState/current) check on /sales
+      // create, which is the enforcement that actually can't be
+      // bypassed; this is just what keeps the UI from ever letting
+      // someone walk into Sell/Payment only to have checkout fail. Not
+      // owner-gated — any staff member is blocked the same way.
+      final onSellRoute = state.matchedLocation.startsWith('/sell');
+      if (signedIn && onSellRoute && shiftRepository.currentShift == null) return '/home';
+
       return null;
     },
     routes: [
@@ -67,6 +87,11 @@ final routerProvider = Provider<GoRouter>((ref) {
       // /invite-staff — see firestore.rules' scoped update on
       // businesses/{businessId}.settings.gasTankCapacityKg.
       GoRoute(path: '/settings', builder: (context, state) => const SettingsScreen()),
+      // Any active staff member — not owner-only. Reachable regardless
+      // of whether a shift is currently open/closed; Home decides which
+      // one to link to (see its open/closed banner).
+      GoRoute(path: '/open-day', builder: (context, state) => OpenDayScreen(onOpened: () => context.go('/home'))),
+      GoRoute(path: '/close-day', builder: (context, state) => CloseDayScreen(onClosed: () => context.go('/home'))),
       // Same owner-only-in-UI, rules-enforced-for-real pattern — see
       // firestore.rules' /categories and /products rules.
       GoRoute(

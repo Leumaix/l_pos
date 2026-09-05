@@ -12,18 +12,22 @@ import 'package:leumadepos/features/sell/application/inventory_providers.dart';
 import 'package:leumadepos/features/sell/application/sales_providers.dart';
 import 'package:leumadepos/features/sell/data/inventory_repository.dart';
 import 'package:leumadepos/features/sell/data/sales_repository.dart';
+import 'package:leumadepos/features/shift/application/shift_providers.dart';
+import 'package:leumadepos/features/shift/data/shift_repository.dart';
 
 Widget _appWithFakeAuth() {
   return ProviderScope(
     overrides: [
       authRepositoryProvider.overrideWithValue(FakeAuthRepository()),
-      // Gas stock and sales both moved to real Firestore this session —
+      // Gas stock, sales, and shift state all moved to real Firestore —
       // without these overrides, Home's dashboard (gas-remaining, and
-      // today's-sales for an owner) would hit the real (signed-out-in-
-      // tests) Firestore path and throw.
+      // today's-sales for an owner) and the router's shift-open check
+      // would hit the real (signed-out-in-tests) Firestore path and
+      // throw.
       inventoryRepositoryProvider.overrideWithValue(FakeInventoryRepository()),
       salesRepositoryProvider.overrideWithValue(FakeSalesRepository()),
       customerRepositoryProvider.overrideWithValue(FakeCustomerRepository()),
+      shiftRepositoryProvider.overrideWithValue(FakeShiftRepository()),
     ],
     child: const LeumadeposApp(),
   );

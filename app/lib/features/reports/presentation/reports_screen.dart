@@ -15,6 +15,8 @@ import '../../customers/application/customer_providers.dart';
 import '../../customers/domain/customer_totals.dart';
 import '../../sell/application/inventory_providers.dart';
 import '../../sell/application/sales_providers.dart';
+import '../../shift/application/shift_providers.dart';
+import '../../shift/domain/shift.dart';
 import '../domain/sales_report.dart';
 
 class ReportsScreen extends ConsumerStatefulWidget {
@@ -35,6 +37,7 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
     final rate = ref.watch(gasRateProvider);
     final capacityKg = ref.watch(gasTankCapacityKgProvider);
     final productsAsync = ref.watch(productsProvider);
+    final shiftHistoryAsync = ref.watch(shiftHistoryProvider);
 
     return Scaffold(
       appBar: AppBar(
@@ -200,10 +203,86 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
                   loading: () => const SizedBox.shrink(),
                   error: (err, _) => const SizedBox.shrink(),
                 ),
+                const SizedBox(height: AppSpacing.xl),
+                Text('Shift history', style: AppTextStyles.headingSm),
+                const SizedBox(height: AppSpacing.sm),
+                Text(
+                  'Every closed business day — the cash float declared, per-method '
+                  'totals, and how the counted drawer compared to what was expected.',
+                  style: AppTextStyles.secondary(AppTextStyles.bodyMd),
+                ),
+                const SizedBox(height: AppSpacing.md),
+                shiftHistoryAsync.when(
+                  data: (shifts) => shifts.isEmpty
+                      ? Text(
+                          'No shifts closed yet.',
+                          style: AppTextStyles.secondary(AppTextStyles.bodyMd),
+                        )
+                      : Column(
+                          children: [
+                            for (final shift in shifts) ...[
+                              _ShiftHistoryCard(shift: shift),
+                              const SizedBox(height: AppSpacing.sm),
+                            ],
+                          ],
+                        ),
+                  loading: () => const Center(child: CircularProgressIndicator(color: AppColors.accent)),
+                  error: (err, _) =>
+                      Text('Could not load shift history', style: AppTextStyles.danger(AppTextStyles.bodyMd)),
+                ),
               ],
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _ShiftHistoryCard extends StatelessWidget {
+  final ClosedShift shift;
+
+  const _ShiftHistoryCard({required this.shift});
+
+  @override
+  Widget build(BuildContext context) {
+    final overOrShort = shift.varianceNaira != 0;
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Expanded(
+                child: Text(
+                  DateFormat('MMM d, y · h:mm a').format(shift.closedAt),
+                  style: AppTextStyles.bodyMd,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: AppSpacing.sm),
+              Text(
+                formatVariance(shift.varianceNaira),
+                style: overOrShort
+                    ? AppTextStyles.danger(AppTextStyles.numericSm)
+                    : AppTextStyles.success(AppTextStyles.numericSm),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.xs),
+          Text(
+            'Opened by ${shift.openedByStaffName} · Closed by ${shift.closedByStaffName}',
+            style: AppTextStyles.secondary(AppTextStyles.bodySm),
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          _BreakdownRow(label: 'Opening float', value: shift.openingFloatNaira),
+          _BreakdownRow(label: 'Cash sales', value: shift.cashTotalNaira),
+          _BreakdownRow(label: 'Card sales', value: shift.cardTotalNaira),
+          _BreakdownRow(label: 'Transfer sales', value: shift.transferTotalNaira),
+          _BreakdownRow(label: 'Customer account sales', value: shift.creditTotalNaira),
+          _BreakdownRow(label: 'Counted cash', value: shift.countedCashNaira, isLast: true),
+        ],
       ),
     );
   }
