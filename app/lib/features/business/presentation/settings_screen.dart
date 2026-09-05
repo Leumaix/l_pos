@@ -23,8 +23,9 @@ class SettingsScreen extends ConsumerWidget {
 
   Future<void> _handleSaveRate(BuildContext context, WidgetRef ref) async {
     final controller = ref.read(gasRateControllerProvider.notifier);
-    final preview = controller.preparePreview();
+    final preview = await controller.preparePreview();
     if (preview == null) return; // invalid input — error already set
+    if (!context.mounted) return;
 
     final confirmed = await showDialog<bool>(
       context: context,

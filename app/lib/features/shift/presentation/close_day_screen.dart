@@ -21,8 +21,9 @@ class CloseDayScreen extends ConsumerWidget {
 
   Future<void> _handleClose(BuildContext context, WidgetRef ref) async {
     final controller = ref.read(closeDayControllerProvider.notifier);
-    final preview = controller.preparePreview();
+    final preview = await controller.preparePreview();
     if (preview == null) return; // invalid input or nothing open — error already set
+    if (!context.mounted) return;
 
     final confirmed = await showDialog<bool>(
       context: context,

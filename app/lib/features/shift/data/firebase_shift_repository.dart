@@ -84,13 +84,38 @@ class FirebaseShiftRepository implements ShiftRepository {
 
   @override
   Stream<OpenShift?> watchCurrentShift() {
-    return _shiftStateDoc.snapshots().map((doc) => _openShiftFromData(doc.data()));
+    // Deliberately does NOT touch _shiftStateDoc (and therefore
+    // _firestore) synchronously at call time — this is wired into
+    // app_router.dart's refreshListenable, which is built ONCE at router
+    // construction, before anyone is signed in. Evaluating _firestore
+    // that early throws (activeFirestore is null pre-sign-in). Instead,
+    // this switches to the real Firestore stream only once
+    // authStateChanges() actually reports someone signed in, and back to
+    // a bare `null` the moment nobody is — never throws, regardless of
+    // when or how early it's subscribed to.
+    return _firebaseAuth.authStateChanges().asyncExpand((user) {
+      if (user == null) return Stream.value(null);
+      final firestore = _firebaseAuth.activeFirestore!;
+      return firestore
+          .doc('businesses/$kBusinessId/shiftState/current')
+          .snapshots()
+          .map((doc) => _openShiftFromData(doc.data()));
+    });
   }
 
   @override
   OpenShift? get currentShift {
     _shiftSubscription ??= watchCurrentShift().listen((shift) => _cachedShift = shift);
     return _cachedShift;
+  }
+
+  @override
+  Future<OpenShift?> fetchCurrentShift() async {
+    // One fresh .get(), not the cached currentShift getter — see this
+    // method's doc comment on the interface for why that can still be
+    // showing null the first time it's ever accessed.
+    final doc = await _shiftStateDoc.get();
+    return _openShiftFromData(doc.data());
   }
 
   @override

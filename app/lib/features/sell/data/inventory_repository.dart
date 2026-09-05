@@ -59,6 +59,18 @@ abstract class InventoryRepository {
   /// restock/sale trail.
   Future<void> changeGasRate(GasRate newRate, {required String staffId, required String staffName});
 
+  /// A one-shot, authoritative read of the CURRENT rate + stock together
+  /// (not [gasRate]/[currentGasStock] — those are cached getters that can
+  /// still be showing their cold-start default the very first time
+  /// they're ever accessed, e.g. reaching Settings without ever visiting
+  /// a screen that already warmed them up). GasRateController.
+  /// preparePreview() needs to be right the first time it's shown, not
+  /// just eventually consistent, since it's the one thing standing
+  /// between a typo and a live pricing change — this reads both together,
+  /// from one snapshot, so the rate and stock it shows are never split
+  /// across two different moments in time either.
+  Future<(GasRate rate, GasStock stock)> fetchCurrentRateAndStock();
+
   Stream<List<Product>> watchProducts();
 
   /// Synchronous access to the current catalog — same rationale as
@@ -223,6 +235,9 @@ class FakeInventoryRepository implements InventoryRepository {
     _gasRateController.add(_gasRate);
     _gasStockController.add(_gasStock);
   }
+
+  @override
+  Future<(GasRate, GasStock)> fetchCurrentRateAndStock() async => (_gasRate, _gasStock);
 
   @override
   GasStock get currentGasStock => _gasStock;

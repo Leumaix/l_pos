@@ -119,6 +119,21 @@ class FirebaseInventoryRepository implements InventoryRepository {
   }
 
   @override
+  Future<(GasRate, GasStock)> fetchCurrentRateAndStock() async {
+    // One fresh .get(), not the cached gasRate/currentGasStock getters —
+    // see this method's doc comment on the interface for why those can
+    // still be showing their cold-start default the first time they're
+    // ever accessed. Same document both values come from, so they can
+    // never be split across two different moments in time either.
+    final doc = await _gasStockDoc.get();
+    final data = doc.data();
+    final rateValue = data?['rate'];
+    final rate = rateValue == null ? const GasRate(kDefaultGasRateNairaPerKg) : GasRate(rateValue as num);
+    final stock = GasStock((data?['units'] as num? ?? 0).toInt());
+    return (rate, stock);
+  }
+
+  @override
   Stream<GasStock> watchGasStock() {
     return _gasStockDoc.snapshots().map(
       (doc) => GasStock((doc.data()?['units'] as num? ?? 0).toInt()),

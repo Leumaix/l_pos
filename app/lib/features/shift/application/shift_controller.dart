@@ -139,13 +139,21 @@ class CloseDayController extends StateNotifier<CloseDayFormState> {
   /// Validates the input and returns what a confirmation dialog needs to
   /// show, WITHOUT writing anything yet. Returns null (and sets an
   /// error) for an invalid amount or if no shift is open.
-  CloseDayPreview? preparePreview() {
+  ///
+  /// Deliberately async, via fetchCurrentShift's one-shot authoritative
+  /// read — NOT ShiftRepository's cached currentShift getter (what the
+  /// router's redirect uses). That getter can still be showing its
+  /// cold-start default (null) the very first time it's ever accessed in
+  /// a session — e.g. reaching Close Day directly from Home without ever
+  /// visiting Sell first — which would falsely report "No shift is
+  /// currently open" even though one plainly is.
+  Future<CloseDayPreview?> preparePreview() async {
     final parsed = int.tryParse(state.countedCashInput.trim());
     if (parsed == null || parsed < 0) {
       state = state.copyWith(errorMessage: 'Enter a valid counted amount in ₦.', justClosed: false);
       return null;
     }
-    final shift = ref.read(shiftRepositoryProvider).currentShift;
+    final shift = await ref.read(shiftRepositoryProvider).fetchCurrentShift();
     if (shift == null) {
       state = state.copyWith(errorMessage: 'No shift is currently open.', justClosed: false);
       return null;

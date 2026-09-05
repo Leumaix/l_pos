@@ -33,6 +33,20 @@
               android:name="io.flutter.embedding.android.NormalTheme"
               android:resource="@style/NormalTheme"
               />
+            <!-- Without this, Flutter's engine ALSO auto-forwards the App
+                 Link intent below straight into go_router as a raw
+                 navigation target (on top of app.dart's own explicit
+                 app_links listener, which is the one that actually knows
+                 how to handle it) — go_router has no route matching the
+                 literal https://.../__/auth/links?... URL, so it throws
+                 "no routes for location" and renders Page Not Found,
+                 stomping on the correct /verify-email navigation that
+                 app.dart's listener already made. This disables ONLY
+                 Flutter's automatic forwarding; app_links' own listener
+                 (app.dart's _handleIncomingUri) is unaffected. -->
+            <meta-data
+              android:name="flutter_deeplinking_enabled"
+              android:value="false" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>

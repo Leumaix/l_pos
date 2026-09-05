@@ -119,18 +119,26 @@ class GasRateController extends StateNotifier<GasRateFormState> {
   /// Validates the input and returns what a confirmation dialog needs to
   /// show — the old rate, the new rate, and the physical kg the change
   /// will preserve — WITHOUT writing anything yet. Returns null (and sets
-  /// an error) for a non-positive/unparseable rate. Synchronous: reads
-  /// InventoryRepository's cached gasRate/currentGasStock, same contract
-  /// RestockController relies on.
-  GasRatePreview? preparePreview() {
+  /// an error) for a non-positive/unparseable rate.
+  ///
+  /// Deliberately async, via fetchCurrentRateAndStock's one-shot
+  /// authoritative read — NOT InventoryRepository's cached gasRate/
+  /// currentGasStock getters (what RestockController uses). Those are
+  /// safe there because restock's actual write is a relative
+  /// FieldValue.increment that never depends on the cached read being
+  /// correct; this preview IS the thing standing between a typo and a
+  /// live pricing change, so it has to be right the first time it's
+  /// shown — including the very first time Settings is ever opened in a
+  /// session, before anything else has warmed those caches up.
+  Future<GasRatePreview?> preparePreview() async {
     final parsed = int.tryParse(state.rateInput.trim());
     if (parsed == null || parsed <= 0) {
       state = state.copyWith(errorMessage: 'Enter a valid rate in ₦/kg.', justSaved: false);
       return null;
     }
     final inventory = ref.read(inventoryRepositoryProvider);
-    final oldRate = inventory.gasRate;
-    final preservedKg = kgRemaining(inventory.currentGasStock, oldRate);
+    final (oldRate, stock) = await inventory.fetchCurrentRateAndStock();
+    final preservedKg = kgRemaining(stock, oldRate);
     return GasRatePreview(oldRate: oldRate, newRate: GasRate(parsed), preservedKg: preservedKg);
   }
 

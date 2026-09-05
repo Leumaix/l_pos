@@ -31,6 +31,16 @@ abstract class ShiftRepository {
   /// and CheckoutController's guard.
   OpenShift? get currentShift;
 
+  /// A one-shot, authoritative read of the current shift — NOT
+  /// [currentShift], which is a lazily-started, cached getter that can
+  /// still be showing its cold-start default (null) the very first time
+  /// it's ever accessed in a given app session, e.g. reaching Close Day
+  /// directly from Home without ever visiting Sell first (which is what
+  /// normally primes it via the router's redirect). Close Day's preview
+  /// needs to be right the first time it's shown, not just eventually
+  /// consistent — see CloseDayController.preparePreview.
+  Future<OpenShift?> fetchCurrentShift();
+
   Future<void> openDay({required int openingFloatNaira, required String staffId, required String staffName});
 
   /// Reads the current shift, computes the close via [closeShift], and
@@ -77,6 +87,9 @@ class FakeShiftRepository implements ShiftRepository {
 
   @override
   OpenShift? get currentShift => _current;
+
+  @override
+  Future<OpenShift?> fetchCurrentShift() async => _current;
 
   @override
   Stream<OpenShift?> watchCurrentShift() {
