@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
@@ -15,10 +16,20 @@ import '../domain/cart_line.dart';
 import '../domain/receipt_text.dart';
 import '../domain/sale.dart';
 
+/// The seam ReceiptScreen shares through — real Share.share by default,
+/// a fake in tests. Needed because share_plus's web implementation only
+/// works through the browser's native Web Share API (navigator.share),
+/// which most desktop browsers (Chrome/Firefox on Windows/Linux) don't
+/// support — it throws there rather than degrading gracefully, so
+/// ReceiptScreen has to be able to force both the success and failure
+/// path in a test without touching a real platform channel.
+typedef ShareText = Future<ShareResult> Function(String text, {String? subject});
+
 class ReceiptScreen extends ConsumerWidget {
   final VoidCallback onNewSale;
+  final ShareText shareText;
 
-  const ReceiptScreen({super.key, required this.onNewSale});
+  const ReceiptScreen({super.key, required this.onNewSale, this.shareText = Share.share});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -70,7 +81,7 @@ class ReceiptScreen extends ConsumerWidget {
                   children: [
                     Expanded(
                       child: OutlinedButton.icon(
-                        onPressed: () => _share(sale, businessName),
+                        onPressed: () => _share(context, sale, businessName),
                         icon: const Icon(Icons.ios_share, size: 18),
                         label: const Text('Share'),
                         style: OutlinedButton.styleFrom(
@@ -95,9 +106,22 @@ class ReceiptScreen extends ConsumerWidget {
     );
   }
 
-  void _share(Sale sale, String businessName) {
+  Future<void> _share(BuildContext context, Sale sale, String businessName) async {
     final text = formatReceiptText(sale, businessName: businessName);
-    Share.share(text, subject: 'Receipt ${sale.receiptNumber}');
+    try {
+      await shareText(text, subject: 'Receipt ${sale.receiptNumber}');
+    } catch (_) {
+      // Web Share API isn't available here (most desktop browsers) —
+      // rather than let the exception surface as a broken button,
+      // fall back to something that always works: put the receipt text
+      // on the clipboard and tell the staff member so.
+      await Clipboard.setData(ClipboardData(text: text));
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Sharing isn\'t available here — receipt copied to clipboard instead.')),
+        );
+      }
+    }
   }
 }
 
