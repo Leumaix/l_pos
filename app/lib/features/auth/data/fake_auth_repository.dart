@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
+
 import 'auth_repository.dart';
 
 /// Stand-in for the real Firebase-backed implementation, used until the
@@ -44,6 +46,12 @@ class FakeAuthRepository implements AuthRepository {
 
   @override
   AppUser? get currentUser => _currentUser;
+
+  /// This fake never touches real Firestore — nothing in the widget-test
+  /// suite exercises a real Firebase-backed repository alongside this
+  /// fake, so there's no real session to hand back here.
+  @override
+  FirebaseFirestore? get activeFirestore => null;
 
   @override
   Stream<AppUser?> authStateChanges() {

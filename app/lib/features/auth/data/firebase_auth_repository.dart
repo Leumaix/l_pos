@@ -72,6 +72,7 @@ class FirebaseAuthRepository implements AuthRepository {
   /// than touching FirebaseFirestore.instance directly — the DEFAULT
   /// FirebaseApp is never signed in under this design, only the
   /// per-staff secondary apps are.
+  @override
   FirebaseFirestore? get activeFirestore {
     final user = _currentUser;
     if (user == null) return null;

@@ -1,7 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../../../core/business_config.dart';
-import '../../auth/data/firebase_auth_repository.dart';
+import '../../auth/data/auth_repository.dart';
 import 'business_repository.dart';
 
 /// Real implementation — reads/writes through whoever is CURRENTLY
@@ -11,7 +11,7 @@ import 'business_repository.dart';
 /// viewer, so which staff member's session happens to back this read
 /// doesn't matter — only that they're a valid active staff member.
 class FirebaseBusinessRepository implements BusinessRepository {
-  final FirebaseAuthRepository _firebaseAuth;
+  final AuthRepository _firebaseAuth;
 
   const FirebaseBusinessRepository(this._firebaseAuth);
 

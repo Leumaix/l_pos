@@ -7,7 +7,7 @@ import '../data/shift_repository.dart';
 /// Same "one-line swap" pattern as auth/inventory/business: real by
 /// default, overridden with FakeShiftRepository in tests.
 final shiftRepositoryProvider = Provider<ShiftRepository>(
-  (ref) => FirebaseShiftRepository(ref.watch(firebaseAuthRepositoryProvider)),
+  (ref) => FirebaseShiftRepository(ref.watch(authRepositoryProvider)),
 );
 
 final currentShiftProvider = StreamProvider((ref) => ref.watch(shiftRepositoryProvider).watchCurrentShift());

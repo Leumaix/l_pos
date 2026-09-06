@@ -15,7 +15,7 @@ final businessNameProvider = Provider<String>((ref) => 'PH-Zazaa Oil & Gas');
 /// Same "one-line swap" pattern as auth/invites: real by default,
 /// overridden with FakeBusinessRepository in tests.
 final businessRepositoryProvider = Provider<BusinessRepository>((ref) {
-  return FirebaseBusinessRepository(ref.watch(firebaseAuthRepositoryProvider));
+  return FirebaseBusinessRepository(ref.watch(authRepositoryProvider));
 });
 
 final _gasTankCapacityStreamProvider = StreamProvider<double>((ref) {

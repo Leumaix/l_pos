@@ -2,7 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../../../core/business_config.dart';
 import '../domain/staff_invite.dart';
-import 'firebase_auth_repository.dart';
+import 'auth_repository.dart';
 import 'staff_invite_repository.dart';
 
 /// Real implementation — reads/writes through whoever is CURRENTLY
@@ -12,7 +12,7 @@ import 'staff_invite_repository.dart';
 /// owner is signed in; the security rules are the real enforcement of
 /// that, this just throws a clearer error if called with nobody active.
 class FirebaseStaffInviteRepository implements StaffInviteRepository {
-  final FirebaseAuthRepository _firebaseAuth;
+  final AuthRepository _firebaseAuth;
 
   const FirebaseStaffInviteRepository(this._firebaseAuth);
 

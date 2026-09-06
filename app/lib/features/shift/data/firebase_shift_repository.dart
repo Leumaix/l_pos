@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../../../core/business_config.dart';
-import '../../auth/data/firebase_auth_repository.dart';
+import '../../auth/data/auth_repository.dart';
 import '../domain/shift.dart';
 import 'shift_repository.dart';
 
@@ -26,7 +26,7 @@ import 'shift_repository.dart';
 /// the way an update does, so the pointer has to already be sitting on
 /// the doc being deleted — hence minting it up front at open time.
 class FirebaseShiftRepository implements ShiftRepository {
-  final FirebaseAuthRepository _firebaseAuth;
+  final AuthRepository _firebaseAuth;
 
   OpenShift? _cachedShift;
   StreamSubscription<OpenShift?>? _shiftSubscription;

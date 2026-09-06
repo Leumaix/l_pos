@@ -9,7 +9,7 @@ import '../data/sales_repository.dart';
 /// FakeSalesRepository (see test/widget_test.dart and friends), same
 /// pattern as every other repository here.
 final salesRepositoryProvider = Provider<SalesRepository>(
-  (ref) => FirebaseSalesRepository(ref.watch(firebaseAuthRepositoryProvider)),
+  (ref) => FirebaseSalesRepository(ref.watch(authRepositoryProvider)),
 );
 
 final salesProvider = StreamProvider((ref) => ref.watch(salesRepositoryProvider).watchSales());
