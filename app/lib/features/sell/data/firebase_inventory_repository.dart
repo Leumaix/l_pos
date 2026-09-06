@@ -87,14 +87,30 @@ class FirebaseInventoryRepository implements InventoryRepository {
       final data = snapshot.data();
       final oldRateValue = data?['rate'];
       if (oldRateValue == null) {
-        // Should never happen in practice — the rate is seeded once,
-        // out-of-band, when a business is provisioned (see
-        // kDefaultGasRateNairaPerKg's doc comment). Surfacing this
-        // loudly rather than silently falling back to a default avoids
-        // ever computing a "preserved kg" against the wrong true rate.
-        throw StateError(
-          'gasStock/current has no rate field yet — it must be seeded before the rate can be changed.',
-        );
+        // No rate has ever been set for this business — a freshly
+        // onboarded business (see the super-admin onboarding tool, which
+        // deliberately writes nothing gas-specific) has no gasStock/
+        // current doc at all yet. There's no old rate to preserve
+        // physical kg against, so this is an initialization, not a
+        // change: units starts at 0 (no prior physical stock to
+        // preserve, since none was ever seeded) and the ledger entry
+        // says so honestly rather than looking like a rateChange with a
+        // fabricated "before" state.
+        transaction.set(_gasStockDoc, {
+          'rate': newRate.nairaPerKg,
+          'units': 0,
+        }, SetOptions(merge: true));
+        transaction.set(_gasStockLedgerCollection.doc(), {
+          'type': 'initialize',
+          'unitsDelta': 0,
+          'oldRate': null,
+          'newRate': newRate.nairaPerKg,
+          'staffId': staffId,
+          'staffName': staffName,
+          'saleId': null,
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+        return;
       }
       final oldRate = GasRate(oldRateValue as num);
       final oldStock = GasStock((data?['units'] as num? ?? 0).toInt());

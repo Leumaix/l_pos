@@ -157,6 +157,68 @@ describe('gas stock (/businesses/{businessId}/gasStock/current)', () => {
     const db = asUser('owner-uid', 'owner@example.com');
     await assertFails(deleteDoc(doc(db, `businesses/${BIZ}/gasStock/current`)));
   });
+
+  it('ALLOWS an active attendant to create the current stock doc for the first time via a units-only restock/sale', async () => {
+    await seedAttendant(BIZ, 'attendant-uid');
+    // No seedGasStock call — the doc genuinely doesn't exist yet.
+    const db = asUser('attendant-uid', 'attendant@example.com');
+    await assertSucceeds(setDoc(doc(db, `businesses/${BIZ}/gasStock/current`), { units: 14000 }, { merge: true }));
+  });
+
+  it('DENIES an active attendant from creating the current stock doc with anything other than `units`', async () => {
+    await seedAttendant(BIZ, 'attendant-uid');
+    const db = asUser('attendant-uid', 'attendant@example.com');
+    await assertFails(
+      setDoc(doc(db, `businesses/${BIZ}/gasStock/current`), { units: 0, rate: 1400 }, { merge: true }),
+    );
+  });
+});
+
+describe('gas stock rate initialization (/businesses/{businessId}/gasStock/current, first-ever create, owner-only)', () => {
+  it('ALLOWS an active owner to set the very first rate on a business with no gasStock doc yet', async () => {
+    await seedOwner(BIZ, 'owner-uid');
+    // No seedGasStock call — this business has never had a rate or any
+    // stock at all, matching a freshly onboarded business.
+    const db = asUser('owner-uid', 'owner@example.com');
+    await assertSucceeds(
+      setDoc(doc(db, `businesses/${BIZ}/gasStock/current`), { rate: 1400, units: 0 }, { merge: true }),
+    );
+
+    await seed(async (adminDb) => {
+      const snap = await getDoc(doc(adminDb, `businesses/${BIZ}/gasStock/current`));
+      assert.equal(snap.data().rate, 1400);
+      assert.equal(snap.data().units, 0);
+    });
+  });
+
+  it('DENIES a non-owner (active attendant) from setting the very first rate', async () => {
+    await seedAttendant(BIZ, 'attendant-uid');
+    const db = asUser('attendant-uid', 'attendant@example.com');
+    await assertFails(
+      setDoc(doc(db, `businesses/${BIZ}/gasStock/current`), { rate: 1400, units: 0 }, { merge: true }),
+    );
+  });
+
+  it('DENIES an owner from initializing with a non-zero units value', async () => {
+    await seedOwner(BIZ, 'owner-uid');
+    const db = asUser('owner-uid', 'owner@example.com');
+    await assertFails(
+      setDoc(doc(db, `businesses/${BIZ}/gasStock/current`), { rate: 1400, units: 5000 }, { merge: true }),
+    );
+  });
+
+  it('DENIES an owner from initializing with a non-positive rate', async () => {
+    await seedOwner(BIZ, 'owner-uid');
+    const db = asUser('owner-uid', 'owner@example.com');
+    await assertFails(setDoc(doc(db, `businesses/${BIZ}/gasStock/current`), { rate: 0, units: 0 }, { merge: true }));
+  });
+
+  it('DENIES an unauthenticated request from initializing the rate', async () => {
+    const db = testEnv.unauthenticatedContext().firestore();
+    await assertFails(
+      setDoc(doc(db, `businesses/${BIZ}/gasStock/current`), { rate: 1400, units: 0 }, { merge: true }),
+    );
+  });
 });
 
 describe('gas stock rate change (/businesses/{businessId}/gasStock/current, owner-only)', () => {

@@ -156,8 +156,8 @@ class GasRateController extends StateNotifier<GasRateFormState> {
           .read(inventoryRepositoryProvider)
           .changeGasRate(newRate, staffId: staff.uid, staffName: staff.name);
       state = const GasRateFormState(justSaved: true);
-    } catch (_) {
-      state = state.copyWith(submitting: false, errorMessage: 'Could not save. Try again.');
+    } catch (e) {
+      state = state.copyWith(submitting: false, errorMessage: 'Could not save — ${e.runtimeType}: $e');
     }
   }
 }

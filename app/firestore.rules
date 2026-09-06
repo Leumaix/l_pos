@@ -153,10 +153,30 @@ service cloud.firestore {
       match /gasStock/{docId} {
         allow read: if isActiveStaffOf(businessId);
 
-        // First-write provisioning — matches status quo (addGasStock/
-        // deductGasStock use a merge-set, which needs create allowed for
-        // the very first write before the doc exists).
-        allow create: if isActiveStaffOf(businessId);
+        // Two deliberately separate create paths, mirroring the two
+        // update paths below — a create can't use .diff(resource.data)
+        // the way an update does (resource doesn't exist yet), so each
+        // is scoped via request.resource.data.keys() instead.
+        //
+        // 1. First-write provisioning by an ordinary sale/restock delta
+        //    — matches status quo (addGasStock/deductGasStock use a
+        //    merge-set, which needs create allowed for the very first
+        //    write before the doc exists). Touches ONLY `units`, same
+        //    scoping as the ordinary-duty update rule below.
+        allow create: if isActiveStaffOf(businessId)
+          && request.resource.data.keys().hasOnly(['units']);
+
+        // 2. First-ever rate set on a business that's never had one —
+        //    owner-only, mirroring the owner-only rate-CHANGE update
+        //    rule below (see FirebaseInventoryRepository.changeGasRate's
+        //    'initialize' branch). There's no old rate to preserve
+        //    physical kg against here, so units must be exactly 0 — a
+        //    fresh initialization, not a recompute.
+        allow create: if isActiveOwnerOf(businessId)
+          && request.resource.data.keys().hasOnly(['rate', 'units'])
+          && request.resource.data.rate is number
+          && request.resource.data.rate > 0
+          && request.resource.data.units == 0;
 
         // Two deliberately separate update paths now that `rate` lives on
         // this same doc — a single "any active staff can write anything"
