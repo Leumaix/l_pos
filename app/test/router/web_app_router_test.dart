@@ -8,7 +8,6 @@ import 'package:mocktail/mocktail.dart';
 
 import 'package:leumadepos/features/auth/application/auth_providers.dart';
 import 'package:leumadepos/features/auth/application/web_auth_controller.dart';
-import 'package:leumadepos/features/auth/data/local_credential_store.dart';
 import 'package:leumadepos/features/auth/data/web_auth_repository.dart';
 import 'package:leumadepos/features/customers/application/customer_providers.dart';
 import 'package:leumadepos/features/customers/data/customer_repository.dart';
@@ -35,14 +34,15 @@ class _MockDocumentSnapshot extends Mock
     implements DocumentSnapshot<Map<String, dynamic>> {}
 
 /// Same style/goal as shift_gating_router_test.dart, but proving the
-/// WEB router specifically: WebLoginScreen at /login instead of the PIN
-/// keypad, and that the same owner-only/shift-gating redirect rules
-/// still hold once signed in through the plain email-link flow — none
-/// of that logic is auth-scheme-specific, so it should behave exactly
-/// like the mobile router's.
+/// WEB router specifically: WebLoginScreen (email+password) at /login
+/// instead of the PIN keypad, and that the same owner-only/shift-gating
+/// redirect rules still hold once signed in — none of that logic is
+/// auth-scheme-specific, so it should behave exactly like the mobile
+/// router's.
 void main() {
   setUpAll(() {
-    registerFallbackValue(fb_auth.ActionCodeSettings(url: 'https://example.com'));
+    registerFallbackValue(_MockDocumentReference());
+    registerFallbackValue(fb_auth.Persistence.NONE);
   });
 
   Future<void> settle(WidgetTester tester) async {
@@ -53,19 +53,27 @@ void main() {
 
   const uid = 'uid-1';
   const email = 'owner@example.com';
-  const link = 'https://example.com/?apiKey=x&mode=signIn&oobCode=y';
+  const password = 'correct-horse-battery-staple';
 
   late _MockFirebaseAuth auth;
   late _MockFirebaseFirestore firestore;
   late _MockDocumentReference staffRef;
   late _MockDocumentSnapshot staffSnapshot;
-  late WebAuthRepository webAuthRepo;
 
   Widget appWithFakes({required FakeShiftRepository shift, required String role}) {
     when(() => firestore.doc('businesses/ph-zazaa/staff/$uid')).thenReturn(staffRef);
     when(() => staffRef.get()).thenAnswer((_) async => staffSnapshot);
     when(() => staffSnapshot.exists).thenReturn(true);
     when(() => staffSnapshot.data()).thenReturn({'name': 'Amaka', 'role': role, 'active': true});
+
+    // Constructed here, inside the testWidgets body's own zone — not in
+    // setUp(), which runs outside the fake-async pump-driven environment
+    // testWidgets uses. WebAuthRepository's constructor kicks off
+    // _persistenceReady (auth.setPersistence(...)); a Future created in
+    // setUp()'s zone never gets "seen" as resolved by this test's own
+    // pump loop, so signIn()/signUp() awaiting it would hang forever —
+    // confirmed by chasing exactly that hang down before this fix.
+    final webAuthRepo = WebAuthRepository(auth: auth, firestore: firestore);
 
     return ProviderScope(
       overrides: [
@@ -84,30 +92,19 @@ void main() {
   }
 
   Future<void> signIn(WidgetTester tester) async {
-    when(() => auth.sendSignInLinkToEmail(
-          email: any(named: 'email'),
-          actionCodeSettings: any(named: 'actionCodeSettings'),
-        )).thenAnswer((_) async {});
-    await tester.enterText(find.byType(TextField), email);
-    await tester.pump(); // let onChanged rebuild the form before checking the button is enabled
-    await tester.tap(find.text('Send link'));
-    await settle(tester);
-
     final credential = _MockUserCredential();
     final fbUser = _MockUser();
     when(() => fbUser.uid).thenReturn(uid);
     when(() => credential.user).thenReturn(fbUser);
-    when(() => auth.isSignInWithEmailLink(link)).thenReturn(true);
-    when(() => auth.signInWithEmailLink(email: email, emailLink: link)).thenAnswer((_) async => credential);
+    when(() => auth.signInWithEmailAndPassword(email: email, password: password))
+        .thenAnswer((_) async => credential);
 
-    // The real trigger is a browser reload with the link in the URL —
-    // there's no in-app UI for it, same as admin_app_test.dart calls
-    // completeSignInIfLinkPresent directly rather than simulating a
-    // reload.
-    final context = tester.element(find.byType(Scaffold).first);
-    await ProviderScope.containerOf(context)
-        .read(webAuthControllerProvider.notifier)
-        .completeSignInIfLinkPresent(link);
+    final fields = find.byType(TextField);
+    await tester.enterText(fields.at(0), email);
+    await tester.pump();
+    await tester.enterText(fields.at(1), password);
+    await tester.pump(); // let onChanged rebuild the form before checking the button is enabled
+    await tester.tap(find.text('Sign in'));
     await settle(tester);
   }
 
@@ -116,26 +113,23 @@ void main() {
     firestore = _MockFirebaseFirestore();
     staffRef = _MockDocumentReference();
     staffSnapshot = _MockDocumentSnapshot();
-    webAuthRepo = WebAuthRepository(auth: auth, firestore: firestore, store: InMemoryCredentialStore());
 
-    // WebApp.initState() checks Uri.base.toString() against
-    // isSignInWithEmailLink on every single pump, for whatever arbitrary
-    // URI the test environment happens to report — false by default;
-    // signIn() below overrides it specifically for the real test link.
-    when(() => auth.isSignInWithEmailLink(any())).thenReturn(false);
+    when(() => auth.setPersistence(any())).thenAnswer((_) async {});
+    when(() => auth.currentUser).thenReturn(null);
   });
 
-  testWidgets('an unauthenticated visitor sees WebLoginScreen (plain email field), not the PIN keypad', (tester) async {
+  testWidgets('an unauthenticated visitor sees WebLoginScreen (email+password), not the PIN keypad', (tester) async {
     final shift = FakeShiftRepository(openShift: false);
     await tester.pumpWidget(appWithFakes(shift: shift, role: 'owner'));
     await settle(tester);
 
-    expect(find.text('Sign in with your work email.'), findsOneWidget);
-    expect(find.text('Send link'), findsOneWidget);
+    expect(find.text('Sign in with your email and password.'), findsOneWidget);
+    expect(find.text('Sign in'), findsOneWidget);
+    expect(find.byType(TextField), findsNWidgets(2)); // email + password
     expect(find.byIcon(Icons.dialpad), findsNothing); // no PIN keypad anywhere on this build
   });
 
-  testWidgets('signing in via the email link reaches Home, reusing the exact same screen as mobile', (tester) async {
+  testWidgets('signing in reaches Home, reusing the exact same screen as mobile', (tester) async {
     final shift = FakeShiftRepository(openShift: false);
     await tester.pumpWidget(appWithFakes(shift: shift, role: 'owner'));
     await settle(tester);

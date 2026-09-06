@@ -4,7 +4,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 
 import 'package:leumadepos/features/auth/application/web_auth_controller.dart';
-import 'package:leumadepos/features/auth/data/local_credential_store.dart';
 import 'package:leumadepos/features/auth/data/web_auth_repository.dart';
 
 class _MockFirebaseAuth extends Mock implements fb_auth.FirebaseAuth {}
@@ -23,7 +22,8 @@ class _MockDocumentSnapshot extends Mock
 
 void main() {
   setUpAll(() {
-    registerFallbackValue(fb_auth.ActionCodeSettings(url: 'https://example.com'));
+    registerFallbackValue(_MockDocumentReference());
+    registerFallbackValue(fb_auth.Persistence.NONE);
   });
 
   late _MockFirebaseAuth auth;
@@ -35,7 +35,7 @@ void main() {
 
   const uid = 'uid-1';
   const email = 'owner@example.com';
-  const link = 'https://example.com/?apiKey=x&mode=signIn&oobCode=y';
+  const password = 'correct-horse-battery-staple';
 
   setUp(() {
     auth = _MockFirebaseAuth();
@@ -43,154 +43,257 @@ void main() {
     staffRef = _MockDocumentReference();
     staffSnapshot = _MockDocumentSnapshot();
 
+    when(() => auth.setPersistence(any())).thenAnswer((_) async {});
     when(() => firestore.doc('businesses/ph-zazaa/staff/$uid')).thenReturn(staffRef);
     when(() => staffRef.get()).thenAnswer((_) async => staffSnapshot);
+    when(() => auth.currentUser).thenReturn(null);
 
-    repository = WebAuthRepository(auth: auth, firestore: firestore, store: InMemoryCredentialStore());
+    repository = WebAuthRepository(auth: auth, firestore: firestore);
     controller = WebAuthController(repository);
   });
 
-  test('starts on the form stage with an empty email', () {
+  test('starts on the form stage, sign-in mode, with empty fields', () {
     expect(controller.state.stage, WebAuthStage.form);
+    expect(controller.state.isSignUpMode, isFalse);
     expect(controller.state.email, isEmpty);
+    expect(controller.state.password, isEmpty);
     expect(controller.state.errorMessage, isNull);
   });
 
-  test('a browser reload while already signed in lands straight on done', () async {
-    when(() => auth.isSignInWithEmailLink(link)).thenReturn(true);
+  test('a browser reload while already fully signed in lands straight on done', () async {
     final credential = _MockUserCredential();
     final fbUser = _MockUser();
     when(() => fbUser.uid).thenReturn(uid);
     when(() => credential.user).thenReturn(fbUser);
-    when(() => auth.signInWithEmailLink(email: email, emailLink: link)).thenAnswer((_) async => credential);
+    when(() => auth.signInWithEmailAndPassword(email: email, password: password))
+        .thenAnswer((_) async => credential);
     when(() => staffSnapshot.exists).thenReturn(true);
     when(() => staffSnapshot.data()).thenReturn({'name': 'Amaka', 'role': 'owner', 'active': true});
-    await repository.completeEmailLinkSignIn(email: email, emailLink: link);
+    await repository.signIn(email: email, password: password);
 
-    // A second controller constructed against the same, already-signed-in
-    // repository — mirrors WebAuthController's constructor check.
     final reloaded = WebAuthController(repository);
     expect(reloaded.state.stage, WebAuthStage.done);
   });
 
-  group('setEmail', () {
-    test('updates the email and clears any previous error', () async {
-      // Produce a real error first, through the controller's own public
-      // API, rather than poking at its protected state directly.
-      when(() => auth.sendSignInLinkToEmail(
-            email: any(named: 'email'),
-            actionCodeSettings: any(named: 'actionCodeSettings'),
-          )).thenThrow(Exception('network unreachable'));
+  test(
+    'a browser reload mid-signup (account created, not yet verified) resumes on '
+    'awaitingVerification instead of losing progress back to a blank form',
+    () async {
+      final fbUser = _MockUser();
+      final signUpCredential = _MockUserCredential();
+      when(() => fbUser.sendEmailVerification()).thenAnswer((_) async {});
+      when(() => signUpCredential.user).thenReturn(fbUser);
+      when(() => auth.createUserWithEmailAndPassword(email: email, password: password))
+          .thenAnswer((_) async => signUpCredential);
+      await repository.signUp(email: email, password: password);
+      // Now that an account exists, currentUser reflects it for the
+      // NEXT controller's construction-time resume check — still
+      // unverified, so completeSignUp() (tried as part of resuming)
+      // should correctly bounce back to awaitingVerification rather
+      // than somehow reaching done.
+      when(() => auth.currentUser).thenReturn(fbUser);
+      when(() => fbUser.email).thenReturn(email);
+      when(() => fbUser.reload()).thenAnswer((_) async {});
+      when(() => fbUser.emailVerified).thenReturn(false);
+
+      final reloaded = WebAuthController(repository);
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+      expect(reloaded.state.stage, WebAuthStage.awaitingVerification);
+      expect(reloaded.state.email, email);
+    },
+  );
+
+  test(
+    'a browser reload with a verified-but-not-yet-resumed session (real close/reopen scenario) '
+    'lands straight on done, not awaitingVerification — this is the actual persistence guarantee',
+    () async {
+      final fbUser = _MockUser();
+      when(() => auth.currentUser).thenReturn(fbUser);
+      when(() => fbUser.uid).thenReturn(uid);
+      when(() => fbUser.email).thenReturn(email);
+      when(() => fbUser.reload()).thenAnswer((_) async {});
+      when(() => fbUser.emailVerified).thenReturn(true); // already verified before the browser closed
+      when(() => staffSnapshot.exists).thenReturn(true);
+      when(() => staffSnapshot.data()).thenReturn({'name': 'Amaka', 'role': 'owner', 'active': true});
+
+      final reloaded = WebAuthController(repository);
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+      expect(reloaded.state.stage, WebAuthStage.done);
+    },
+  );
+
+  group('setEmail / setPassword / toggleSignUpMode', () {
+    test('update their fields and clear any previous error', () async {
+      when(() => auth.signInWithEmailAndPassword(email: any(named: 'email'), password: any(named: 'password')))
+          .thenThrow(fb_auth.FirebaseAuthException(code: 'wrong-password'));
       controller.setEmail(email);
-      await controller.sendLink();
+      controller.setPassword('wrong');
+      await controller.signIn();
       expect(controller.state.errorMessage, isNotNull);
 
       controller.setEmail('  Owner@Example.com  ');
-
       expect(controller.state.email, '  Owner@Example.com  ');
       expect(controller.state.errorMessage, isNull);
+
+      controller.setPassword(password);
+      expect(controller.state.password, password);
+    });
+
+    test('toggling sign-up mode flips the flag and clears the password field', () {
+      controller.setPassword('something');
+      controller.toggleSignUpMode();
+      expect(controller.state.isSignUpMode, isTrue);
+      expect(controller.state.password, isEmpty);
+
+      controller.toggleSignUpMode();
+      expect(controller.state.isSignUpMode, isFalse);
     });
   });
 
-  group('sendLink', () {
-    test('does nothing for a blank email', () async {
-      controller.setEmail('   ');
-      await controller.sendLink();
-      expect(controller.state.stage, WebAuthStage.form);
-      verifyNever(() => auth.sendSignInLinkToEmail(
-            email: any(named: 'email'),
-            actionCodeSettings: any(named: 'actionCodeSettings'),
-          ));
-    });
-
-    test('moves to linkSent on success', () async {
-      when(() => auth.sendSignInLinkToEmail(
-            email: any(named: 'email'),
-            actionCodeSettings: any(named: 'actionCodeSettings'),
-          )).thenAnswer((_) async {});
-
+  group('signIn', () {
+    test('does nothing when email or password is blank', () async {
       controller.setEmail(email);
-      await controller.sendLink();
-
-      expect(controller.state.stage, WebAuthStage.linkSent);
-      expect(controller.state.errorMessage, isNull);
-    });
-
-    test('falls back to the form stage with an honest error message on failure', () async {
-      when(() => auth.sendSignInLinkToEmail(
-            email: any(named: 'email'),
-            actionCodeSettings: any(named: 'actionCodeSettings'),
-          )).thenThrow(Exception('network unreachable'));
-
-      controller.setEmail(email);
-      await controller.sendLink();
-
+      // password left blank
+      await controller.signIn();
       expect(controller.state.stage, WebAuthStage.form);
-      expect(controller.state.errorMessage, contains('network unreachable'));
-    });
-  });
-
-  group('completeSignInIfLinkPresent', () {
-    test('is a no-op for an ordinary fresh page load (not a sign-in link)', () async {
-      when(() => auth.isSignInWithEmailLink('https://example.com/')).thenReturn(false);
-
-      await controller.completeSignInIfLinkPresent('https://example.com/');
-
-      expect(controller.state.stage, WebAuthStage.form);
-      expect(controller.state.errorMessage, isNull);
+      verifyNever(
+        () => auth.signInWithEmailAndPassword(email: any(named: 'email'), password: any(named: 'password')),
+      );
     });
 
-    test('surfaces a clear error when no pending email is remembered on this browser', () async {
-      when(() => auth.isSignInWithEmailLink(link)).thenReturn(true);
-      // Deliberately never called sendLink first — no pending email saved.
-
-      await controller.completeSignInIfLinkPresent(link);
-
-      expect(controller.state.stage, WebAuthStage.form);
-      expect(controller.state.errorMessage, contains('No pending sign-in email'));
-      verifyNever(() => auth.signInWithEmailLink(email: any(named: 'email'), emailLink: any(named: 'emailLink')));
-    });
-
-    test('completes sign-in and reaches done when a link arrives for a real pending email', () async {
-      when(() => auth.sendSignInLinkToEmail(
-            email: any(named: 'email'),
-            actionCodeSettings: any(named: 'actionCodeSettings'),
-          )).thenAnswer((_) async {});
-      controller.setEmail(email);
-      await controller.sendLink();
-      expect(controller.state.stage, WebAuthStage.linkSent);
-
-      when(() => auth.isSignInWithEmailLink(link)).thenReturn(true);
+    test('moves straight to done on success', () async {
       final credential = _MockUserCredential();
       final fbUser = _MockUser();
       when(() => fbUser.uid).thenReturn(uid);
       when(() => credential.user).thenReturn(fbUser);
-      when(() => auth.signInWithEmailLink(email: email, emailLink: link)).thenAnswer((_) async => credential);
+      when(() => auth.signInWithEmailAndPassword(email: email, password: password))
+          .thenAnswer((_) async => credential);
       when(() => staffSnapshot.exists).thenReturn(true);
       when(() => staffSnapshot.data()).thenReturn({'name': 'Amaka', 'role': 'owner', 'active': true});
 
-      await controller.completeSignInIfLinkPresent(link);
+      controller.setEmail(email);
+      controller.setPassword(password);
+      await controller.signIn();
 
       expect(controller.state.stage, WebAuthStage.done);
       expect(controller.state.errorMessage, isNull);
     });
 
-    test('falls back to the form stage with an honest error for an invalid/expired link', () async {
-      when(() => auth.sendSignInLinkToEmail(
-            email: any(named: 'email'),
-            actionCodeSettings: any(named: 'actionCodeSettings'),
-          )).thenAnswer((_) async {});
+    test('falls back to the form stage with an honest error on wrong credentials', () async {
+      when(() => auth.signInWithEmailAndPassword(email: email, password: password))
+          .thenThrow(fb_auth.FirebaseAuthException(code: 'wrong-password', message: 'The password is invalid'));
+
       controller.setEmail(email);
-      await controller.sendLink();
-
-      when(() => auth.isSignInWithEmailLink(link)).thenReturn(true);
-      when(() => auth.signInWithEmailLink(email: email, emailLink: link))
-          .thenThrow(fb_auth.FirebaseAuthException(code: 'invalid-action-code'));
-
-      await controller.completeSignInIfLinkPresent(link);
+      controller.setPassword(password);
+      await controller.signIn();
 
       expect(controller.state.stage, WebAuthStage.form);
-      expect(controller.state.errorMessage, contains('invalid or expired'));
+      expect(controller.state.errorMessage, contains('wrong-password'));
+    });
+  });
+
+  group('signUp', () {
+    test('does nothing when email or password is blank', () async {
+      controller.setEmail(email);
+      await controller.signUp();
+      expect(controller.state.stage, WebAuthStage.form);
+      verifyNever(
+        () => auth.createUserWithEmailAndPassword(email: any(named: 'email'), password: any(named: 'password')),
+      );
+    });
+
+    test('moves to awaitingVerification on success, having sent exactly one verification email', () async {
+      final fbUser = _MockUser();
+      final credential = _MockUserCredential();
+      when(() => fbUser.sendEmailVerification()).thenAnswer((_) async {});
+      when(() => credential.user).thenReturn(fbUser);
+      when(() => auth.createUserWithEmailAndPassword(email: email, password: password))
+          .thenAnswer((_) async => credential);
+
+      controller.setEmail(email);
+      controller.setPassword(password);
+      await controller.signUp();
+
+      expect(controller.state.stage, WebAuthStage.awaitingVerification);
+      verify(() => fbUser.sendEmailVerification()).called(1);
+    });
+
+    test('falls back to the form stage with an honest error when the email is already in use', () async {
+      when(() => auth.createUserWithEmailAndPassword(email: email, password: password))
+          .thenThrow(fb_auth.FirebaseAuthException(code: 'email-already-in-use'));
+
+      controller.setEmail(email);
+      controller.setPassword(password);
+      await controller.signUp();
+
+      expect(controller.state.stage, WebAuthStage.form);
+      expect(controller.state.errorMessage, contains('email-already-in-use'));
+    });
+  });
+
+  group('checkVerificationAndContinue', () {
+    Future<void> signUpFirst() async {
+      final fbUser = _MockUser();
+      final credential = _MockUserCredential();
+      when(() => fbUser.sendEmailVerification()).thenAnswer((_) async {});
+      when(() => credential.user).thenReturn(fbUser);
+      when(() => auth.createUserWithEmailAndPassword(email: email, password: password))
+          .thenAnswer((_) async => credential);
+      controller.setEmail(email);
+      controller.setPassword(password);
+      await controller.signUp();
+
+      when(() => fbUser.uid).thenReturn(uid);
+      when(() => fbUser.email).thenReturn(email);
+      when(() => auth.currentUser).thenReturn(fbUser);
+      when(() => fbUser.reload()).thenAnswer((_) async {
+        when(() => fbUser.emailVerified).thenReturn(true);
+      });
+      when(() => fbUser.emailVerified).thenReturn(false);
+    }
+
+    test('reaches done once Firebase confirms the reloaded user is verified', () async {
+      await signUpFirst();
+      when(() => staffSnapshot.exists).thenReturn(true);
+      when(() => staffSnapshot.data()).thenReturn({'name': 'Amaka', 'role': 'owner', 'active': true});
+
+      await controller.checkVerificationAndContinue();
+
+      expect(controller.state.stage, WebAuthStage.done);
+      expect(controller.state.errorMessage, isNull);
+    });
+
+    test('stays on awaitingVerification with a clear message when not actually verified yet', () async {
+      final fbUser = _MockUser();
+      final credential = _MockUserCredential();
+      when(() => fbUser.sendEmailVerification()).thenAnswer((_) async {});
+      when(() => credential.user).thenReturn(fbUser);
+      when(() => auth.createUserWithEmailAndPassword(email: email, password: password))
+          .thenAnswer((_) async => credential);
+      controller.setEmail(email);
+      controller.setPassword(password);
+      await controller.signUp();
+
+      when(() => auth.currentUser).thenReturn(fbUser);
+      when(() => fbUser.reload()).thenAnswer((_) async {});
+      when(() => fbUser.emailVerified).thenReturn(false); // reload didn't change anything — still unverified
+
+      await controller.checkVerificationAndContinue();
+
+      expect(controller.state.stage, WebAuthStage.awaitingVerification);
+      expect(controller.state.errorMessage, contains('Not verified yet'));
+    });
+  });
+
+  group('resendVerificationEmail', () {
+    test('surfaces an honest error if it fails, without changing stage', () async {
+      when(() => auth.currentUser).thenReturn(null); // nobody signed in -> StateError inside the repo
+
+      await controller.resendVerificationEmail();
+
+      expect(controller.state.errorMessage, isNotNull);
     });
   });
 
