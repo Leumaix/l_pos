@@ -69,6 +69,37 @@ class _GasNumpadSheetState extends ConsumerState<_GasNumpadSheet> {
     final gasStockAsync = ref.watch(gasStockProvider);
     final value = _value;
 
+    // Named so the exact same callback wires both the on-screen "Add to
+    // cart" button and KeypadEntryLayout's physical-keyboard Enter —
+    // one source of truth, not two copies of the enabled condition that
+    // could drift apart.
+    final VoidCallback? onAddToCart = (value != null && value > 0)
+        ? () {
+            final gasStock = gasStockAsync.valueOrNull;
+            if (gasStock == null) return;
+            final controller = ref.read(cartControllerProvider.notifier);
+            final result = _mode == GasSaleMode.kg
+                ? controller.addGasKg(
+                    kg: value,
+                    currentGasStock: gasStock,
+                    rate: rate,
+                  )
+                : controller.addGasAmount(
+                    amountNaira: value.round(),
+                    currentGasStock: gasStock,
+                  );
+            Navigator.of(context).pop();
+            if (result.message != null) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(result.message!),
+                  backgroundColor: AppColors.dangerBg,
+                ),
+              );
+            }
+          }
+        : null;
+
     return Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
       child: SafeArea(
@@ -147,35 +178,10 @@ class _GasNumpadSheetState extends ConsumerState<_GasNumpadSheet> {
             ),
             action: AppButton(
               label: 'Add to cart',
-              onPressed: (value != null && value > 0)
-                  ? () {
-                      final gasStock = gasStockAsync.valueOrNull;
-                      if (gasStock == null) return;
-                      final controller = ref.read(
-                        cartControllerProvider.notifier,
-                      );
-                      final result = _mode == GasSaleMode.kg
-                          ? controller.addGasKg(
-                              kg: value,
-                              currentGasStock: gasStock,
-                              rate: rate,
-                            )
-                          : controller.addGasAmount(
-                              amountNaira: value.round(),
-                              currentGasStock: gasStock,
-                            );
-                      Navigator.of(context).pop();
-                      if (result.message != null) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(result.message!),
-                            backgroundColor: AppColors.dangerBg,
-                          ),
-                        );
-                      }
-                    }
-                  : null,
+              onPressed: onAddToCart,
             ),
+            onKeyTap: _tapKey,
+            onSubmit: onAddToCart,
           ),
         ),
       ),
