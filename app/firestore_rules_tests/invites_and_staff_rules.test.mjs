@@ -85,6 +85,15 @@ function asUser(uid, email) {
   return testEnv.authenticatedContext(uid, { email, email_verified: true }).firestore();
 }
 
+// platformConfig/superAdmins is unreadable/unwritable from any client
+// (see firestore.rules) — seeding it always goes through the same
+// rules-bypass context every other fixture in this suite uses.
+async function seedSuperAdmin(uid) {
+  await seed(async (db) => {
+    await setDoc(doc(db, 'platformConfig/superAdmins'), { uids: [uid] });
+  });
+}
+
 function asUnverifiedUser(uid, email) {
   return testEnv.authenticatedContext(uid, { email, email_verified: false }).firestore();
 }
@@ -305,6 +314,24 @@ describe('invite management (/invites/{email})', () => {
         role: 'attendant',
         invitedAt: new Date(),
         invitedBy: 'nobody',
+      }),
+    );
+  });
+
+  it('ALLOWS a seeded platform super-admin to create the first-owner invite for a business with zero staff — '
+    + 'the circular case isActiveOwnerOf alone can never satisfy', async () => {
+    // Deliberately no seedOwner/seedAttendant anywhere under BRAND_NEW —
+    // no staff doc exists for anyone, exactly the moment this carve-out
+    // is for.
+    const BRAND_NEW = 'brand-new-biz';
+    await seedSuperAdmin('super-admin-uid');
+    const db = asUser('super-admin-uid', 'admin@example.com');
+    await assertSucceeds(
+      setDoc(doc(db, `businesses/${BRAND_NEW}/invites/firstowner@example.com`), {
+        name: 'First Owner',
+        role: 'owner',
+        invitedAt: new Date(),
+        invitedBy: 'super-admin-uid',
       }),
     );
   });

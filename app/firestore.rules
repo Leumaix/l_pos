@@ -39,12 +39,34 @@ service cloud.firestore {
 
     // An active staff member whose role is specifically 'owner' — the
     // one role trusted to provision other staff in-app (see /invites and
-    // /staff's allow-create below). Business creation itself stays
-    // console-only and out-of-band regardless of role; this only governs
-    // who can add STAFF to a business that already exists.
+    // /staff's allow-create below). This only ever governs who can add
+    // STAFF to a business that ALREADY EXISTS; it says nothing about
+    // creating the business itself — see isPlatformSuperAdmin() below for
+    // that.
     function isActiveOwnerOf(businessId) {
       return isActiveStaffOf(businessId)
         && get(/databases/$(database)/documents/businesses/$(businessId)/staff/$(request.auth.uid)).data.role == 'owner';
+    }
+
+    // The platform operator (Sammy), not tied to any one business — used
+    // by the separate super-admin onboarding tool to create new
+    // businesses and their first-owner invite, and to read across every
+    // business for monitoring. Membership is a Firestore document
+    // (platformConfig/superAdmins.uids, a plain list), not a uid literal
+    // baked into this file, so granting/revoking admin access later is a
+    // database write, not a rules edit + redeploy — same shape as
+    // isActiveOwnerOf's own staff-membership check, one level up. That
+    // document itself is unreadable and unwritable from any client (see
+    // its own match block below) — this get() still works regardless,
+    // since a rule's own internal get()/exists() calls are exempt from
+    // the target document's rules, exactly how isActiveStaffOf already
+    // reads staff/{uid} regardless of THAT document's own allow read.
+    // Bootstrapping the first entry (and changing membership later) is a
+    // deliberate, one-time, out-of-band Console/Admin-SDK action — the
+    // same shape as the very first business owner's own bootstrap.
+    function isPlatformSuperAdmin() {
+      return isSignedIn()
+        && request.auth.uid in get(/databases/$(database)/documents/platformConfig/superAdmins).data.uids;
     }
 
     // Used only by shiftState/current's delete rule (closing a shift) —
@@ -60,29 +82,49 @@ service cloud.firestore {
         && historyDoc.data.expectedCashNaira == openingFloatNaira + cashTotalNaira;
     }
 
+    // Platform-operator config, not scoped to any business. Deliberately
+    // unreadable and unwritable from any client, even a recognized
+    // super-admin — see isPlatformSuperAdmin()'s own comment for why its
+    // internal get() still works regardless. The only way this document
+    // is ever created or changed is Console/Admin SDK, out-of-band.
+    match /platformConfig/{docId} {
+      allow read, write: if false;
+    }
+
     match /businesses/{businessId} {
       // Business settings (name, tank capacity): readable by active
-      // staff. Writable only in one narrow way: an active owner may
+      // staff, or the platform super-admin monitoring across every
+      // business. Writable only in one narrow way: an active owner may
       // update settings.gasTankCapacityKg — nothing else on this
-      // document, ever, from the client. That field only feeds the Stock
-      // screen's gauge, so it's safe to open up on its own. The gas RATE
-      // is a separate, owner-only editable field — but it lives on
-      // gasStock/current (below), not here, since changing it has to
-      // atomically recompute units too; see that match block.
-      allow read: if isActiveStaffOf(businessId);
+      // document, ever, from the client, not even the super-admin (see
+      // allow update below — no isPlatformSuperAdmin() carve-out there,
+      // deliberately). That field only feeds the Stock screen's gauge,
+      // so it's safe to open up on its own. The gas RATE is a separate,
+      // owner-only editable field — but it lives on gasStock/current
+      // (below), not here, since changing it has to atomically recompute
+      // units too; see that match block.
+      allow read: if isActiveStaffOf(businessId) || isPlatformSuperAdmin();
       allow update: if isActiveOwnerOf(businessId)
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['settings'])
         && (
           !('settings' in resource.data)
           || request.resource.data.settings.diff(resource.data.settings).affectedKeys().hasOnly(['gasTankCapacityKg'])
         );
-      allow create, delete: if false;
+
+      // Creating a brand-new business is the one thing ONLY the
+      // super-admin onboarding tool can do — no owner of any business,
+      // including this one, can ever create another. Deletion stays
+      // hard-denied for everyone; not a capability this app offers.
+      allow create: if isPlatformSuperAdmin();
+      allow delete: if false;
 
       match /staff/{staffId} {
         // A staff member reads only their OWN doc, never the roster —
         // nothing in the app needs the full staff list, and phone/email
-        // on a colleague's record isn't this client's business.
-        allow read: if isSignedIn() && request.auth.uid == staffId;
+        // on a colleague's record isn't this client's business. The
+        // super-admin tool is the one exception, reading across every
+        // business's roster for monitoring.
+        allow read: if (isSignedIn() && request.auth.uid == staffId) || isPlatformSuperAdmin();
 
         // Self-service provisioning: lets an owner add staff in-app (see
         // /invites below) without touching the console — business
@@ -110,12 +152,17 @@ service cloud.firestore {
       }
 
       match /invites/{email} {
-        // Who can ISSUE a staff invite: only an active owner of THIS
+        // Who can ISSUE a staff invite: an active owner of THIS
         // business — the in-app on-ramp is gated exactly as tightly as
-        // console provisioning was. No update path: a changed invite is
-        // a delete-then-create (see the client), so there's never an
-        // ambiguous partial edit to reason about.
-        allow create: if isActiveOwnerOf(businessId);
+        // console provisioning was — OR the platform super-admin, which
+        // exists specifically for the brand-new-business case: a
+        // business with no owner yet has no staff doc for anyone, so
+        // isActiveOwnerOf can never be true for it, no matter who's
+        // asking. The super-admin onboarding tool's first-owner invite
+        // relies on exactly this carve-out. No update path: a changed
+        // invite is a delete-then-create (see the client), so there's
+        // never an ambiguous partial edit to reason about.
+        allow create: if isActiveOwnerOf(businessId) || isPlatformSuperAdmin();
 
         // Who can DELETE one: an active owner revoking a pending invite
         // (the account-menu UI), OR the invited person themselves,
@@ -145,13 +192,15 @@ service cloud.firestore {
         // OWN auth email — never the whole collection. This is what
         // lets the client read the name/role it needs to write into its
         // own staff-doc creation above, without exposing who else has
-        // been invited.
+        // been invited. The super-admin tool can read any invite, on any
+        // business, for monitoring.
         allow read: if isActiveOwnerOf(businessId)
-          || (isSignedIn() && request.auth.token.email.lower() == email);
+          || (isSignedIn() && request.auth.token.email.lower() == email)
+          || isPlatformSuperAdmin();
       }
 
       match /gasStock/{docId} {
-        allow read: if isActiveStaffOf(businessId);
+        allow read: if isActiveStaffOf(businessId) || isPlatformSuperAdmin();
 
         // Two deliberately separate create paths, mirroring the two
         // update paths below — a create can't use .diff(resource.data)
@@ -217,7 +266,7 @@ service cloud.firestore {
       match /gasStockLedger/{entryId} {
         // Append-only audit trail — created by a sale or a restock,
         // never edited or removed after the fact.
-        allow read: if isActiveStaffOf(businessId);
+        allow read: if isActiveStaffOf(businessId) || isPlatformSuperAdmin();
         allow create: if isActiveStaffOf(businessId);
         allow update, delete: if false;
       }
@@ -229,12 +278,12 @@ service cloud.firestore {
         // client-side, not here — rules can't query "does any product
         // reference this category", only check specific known document
         // paths (see FirebaseInventoryRepository.deleteCategory).
-        allow read: if isActiveStaffOf(businessId);
+        allow read: if isActiveStaffOf(businessId) || isPlatformSuperAdmin();
         allow create, update, delete: if isActiveOwnerOf(businessId);
       }
 
       match /products/{productId} {
-        allow read: if isActiveStaffOf(businessId);
+        allow read: if isActiveStaffOf(businessId) || isPlatformSuperAdmin();
 
         // Owners can do anything to a product — rename, reprice, move it
         // to a different category, or remove it entirely.
@@ -269,7 +318,7 @@ service cloud.firestore {
       }
 
       match /customers/{customerId} {
-        allow read: if isActiveStaffOf(businessId);
+        allow read: if isActiveStaffOf(businessId) || isPlatformSuperAdmin();
 
         // A brand-new customer can only start at a nonzero balance if
         // an owner is creating it (migrating an existing debtor's
@@ -317,7 +366,7 @@ service cloud.firestore {
         match /transactions/{transactionId} {
           // Append-only ledger — a correction is a new transaction, not
           // an edit to history.
-          allow read: if isActiveStaffOf(businessId);
+          allow read: if isActiveStaffOf(businessId) || isPlatformSuperAdmin();
           allow create: if isActiveStaffOf(businessId);
           allow update, delete: if false;
         }
@@ -345,7 +394,7 @@ service cloud.firestore {
         // FirebaseCheckoutRepository check this too, for a clean client-
         // side error instead of a raw permission-denied, but this is
         // what actually can't be bypassed.
-        allow read: if isActiveOwnerOf(businessId);
+        allow read: if isActiveOwnerOf(businessId) || isPlatformSuperAdmin();
         allow create: if isActiveStaffOf(businessId)
           && exists(/databases/$(database)/documents/businesses/$(businessId)/shiftState/current);
         allow update, delete: if false;
@@ -367,7 +416,7 @@ service cloud.firestore {
         // ever matches a write against a doc that doesn't already exist,
         // so a second open attempt while one is live has no matching
         // rule at all — no separate staleness check needed.
-        allow read: if isActiveStaffOf(businessId);
+        allow read: if isActiveStaffOf(businessId) || isPlatformSuperAdmin();
         allow create: if isActiveStaffOf(businessId)
           && request.resource.data.openingFloatNaira is number
           && request.resource.data.openingFloatNaira >= 0;
@@ -417,19 +466,23 @@ service cloud.firestore {
         // business day is exactly the kind of revenue figure Home's
         // role split already keeps from attendants, even though any
         // staff member can be the one who CLOSES a shift (create).
-        allow read: if isActiveOwnerOf(businessId);
+        allow read: if isActiveOwnerOf(businessId) || isPlatformSuperAdmin();
         allow create: if isActiveStaffOf(businessId);
         allow update, delete: if false;
       }
     }
 
-    // Nothing else exists at the top level. In particular: no path for a
-    // client to create a BUSINESS document itself — that stays a
-    // console-only, out-of-band, vendor-controlled action, by
-    // construction (there is no `allow create` for
-    // /businesses/{businessId} anywhere above). Adding STAFF to a
-    // business that already exists is the one thing a client can now do
-    // in-app, and only through the narrow, invite-gated path above.
+    // Nothing else exists at the top level besides platformConfig (its
+    // own match block above, unconditionally locked to every client).
+    // Creating a BUSINESS document is now possible for exactly one
+    // identity — the platform super-admin, via isPlatformSuperAdmin()'s
+    // carve-out on /businesses/{businessId}'s own allow create above —
+    // everyone else, including every business's own owner, still has no
+    // path to it at all. Adding STAFF to a business that already exists
+    // remains the one thing an ordinary owner can do in-app, through the
+    // narrow, invite-gated path above; the super-admin's own invite
+    // carve-out exists solely to unblock a business's very FIRST owner,
+    // before any staff doc exists for anyone to be "active owner" of.
     match /{document=**} {
       allow read, write: if false;
     }

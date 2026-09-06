@@ -75,6 +75,15 @@ async function seedAttendant(businessId, uid) {
   });
 }
 
+// platformConfig/superAdmins is unreadable/unwritable from any client
+// (see firestore.rules) — seeding it always goes through the same
+// rules-bypass context every other fixture in this suite uses.
+async function seedSuperAdmin(uid) {
+  await seed(async (db) => {
+    await setDoc(doc(db, 'platformConfig/superAdmins'), { uids: [uid] });
+  });
+}
+
 function asUser(uid, email) {
   return testEnv.authenticatedContext(uid, { email, email_verified: true }).firestore();
 }
@@ -192,6 +201,12 @@ describe('business settings (allow update on /businesses/{businessId})', () => {
     await seedOwner(BIZ, 'owner-uid');
     const db = asUser('owner-uid', 'owner@example.com');
     await assertFails(setDoc(doc(db, 'businesses/brand-new-biz'), { name: 'New Biz' }));
+  });
+
+  it('ALLOWS a seeded platform super-admin to create a new business document', async () => {
+    await seedSuperAdmin('super-admin-uid');
+    const db = asUser('super-admin-uid', 'admin@example.com');
+    await assertSucceeds(setDoc(doc(db, 'businesses/brand-new-biz'), { name: 'New Biz' }));
   });
 
   it('DENIES deleting the business document, even as its own active owner', async () => {
