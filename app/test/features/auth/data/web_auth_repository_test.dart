@@ -50,9 +50,10 @@ void main() {
     inviteSnapshot = _MockDocumentSnapshot();
     batch = _MockWriteBatch();
 
-    when(() => auth.setPersistence(any())).thenAnswer((_) async {});
-    when(() => firestore.doc('businesses/ph-zazaa/staff/$uid')).thenReturn(staffRef);
-    when(() => firestore.doc('businesses/ph-zazaa/invites/$email')).thenReturn(inviteRef);
+    when(() => firestore.doc('businesses/ph-zazaa/staff/$uid'))
+        .thenReturn(staffRef);
+    when(() => firestore.doc('businesses/ph-zazaa/invites/$email'))
+        .thenReturn(inviteRef);
     when(() => staffRef.get()).thenAnswer((_) async => staffSnapshot);
     when(() => inviteRef.get()).thenAnswer((_) async => inviteSnapshot);
     when(() => firestore.batch()).thenReturn(batch);
@@ -63,8 +64,8 @@ void main() {
     repository = WebAuthRepository(auth: auth, firestore: firestore);
   });
 
-  test('sets persistence to LOCAL at construction, so a session survives closing the browser', () {
-    verify(() => auth.setPersistence(fb_auth.Persistence.LOCAL)).called(1);
+  test('never calls setPersistence — that call is not idempotent and wipes an already-persisted session on the SDK we use, so browserLocalPersistence is left as the untouched default', () {
+    verifyNever(() => auth.setPersistence(any()));
   });
 
   group('signUp', () {
@@ -73,12 +74,24 @@ void main() {
       final credential = _MockUserCredential();
       when(() => credential.user).thenReturn(fbUser);
       when(() => fbUser.sendEmailVerification()).thenAnswer((_) async {});
-      when(() => auth.createUserWithEmailAndPassword(email: email, password: password))
-          .thenAnswer((_) async => credential);
+      when(
+        () => auth.createUserWithEmailAndPassword(
+          email: email,
+          password: password,
+        ),
+      ).thenAnswer((_) async => credential);
 
-      await repository.signUp(email: '  Owner@Example.com  ', password: password);
+      await repository.signUp(
+        email: '  Owner@Example.com  ',
+        password: password,
+      );
 
-      verify(() => auth.createUserWithEmailAndPassword(email: email, password: password)).called(1);
+      verify(
+        () => auth.createUserWithEmailAndPassword(
+          email: email,
+          password: password,
+        ),
+      ).called(1);
       verify(() => fbUser.sendEmailVerification()).called(1);
       // Not signed in yet as far as the app is concerned — self-provisioning hasn't run.
       expect(repository.currentUser, isNull);
@@ -124,74 +137,87 @@ void main() {
       final fbUser = _MockUser();
       when(() => auth.currentUser).thenReturn(fbUser);
       when(() => fbUser.reload()).thenAnswer((_) async {});
+      when(() => fbUser.getIdToken(any()))
+          .thenAnswer((_) async => 'fake-token');
       when(() => fbUser.emailVerified).thenReturn(false);
 
-      await expectLater(repository.completeSignUp, throwsA(isA<EmailNotVerifiedException>()));
+      await expectLater(
+        repository.completeSignUp,
+        throwsA(isA<EmailNotVerifiedException>()),
+      );
       expect(repository.currentUser, isNull);
     });
 
-    test(
-      'completes into a real AppUser and activates the session once the reload shows verified, '
-      'when the staff doc already exists',
-      () async {
-        final fbUser = _MockUser();
-        when(() => auth.currentUser).thenReturn(fbUser);
-        when(() => fbUser.uid).thenReturn(uid);
-        when(() => fbUser.email).thenReturn(email);
-        // reload() flips emailVerified true, matching how the real SDK
-        // updates the same cached User object in place.
-        when(() => fbUser.reload()).thenAnswer((_) async {
-          when(() => fbUser.emailVerified).thenReturn(true);
-        });
-        when(() => fbUser.emailVerified).thenReturn(false);
+    test('completes into a real AppUser and activates the session once the reload shows verified, '
+        'when the staff doc already exists', () async {
+      final fbUser = _MockUser();
+      when(() => auth.currentUser).thenReturn(fbUser);
+      when(() => fbUser.uid).thenReturn(uid);
+      when(() => fbUser.email).thenReturn(email);
+      // reload() flips emailVerified true, matching how the real SDK
+      // updates the same cached User object in place.
+      when(() => fbUser.reload()).thenAnswer((_) async {
+        when(() => fbUser.emailVerified).thenReturn(true);
+      });
+      when(() => fbUser.getIdToken(any()))
+          .thenAnswer((_) async => 'fake-token');
+      when(() => fbUser.emailVerified).thenReturn(false);
 
-        when(() => staffSnapshot.exists).thenReturn(true);
-        when(() => staffSnapshot.data()).thenReturn({
-          'name': 'Amaka',
+      when(() => staffSnapshot.exists).thenReturn(true);
+      when(() => staffSnapshot.data()).thenReturn({
+        'name': 'Amaka',
+        'role': 'owner',
+        'active': true,
+        'phone': '08000000000',
+      });
+
+      final appUser = await repository.completeSignUp();
+
+      expect(appUser.uid, uid);
+      expect(appUser.name, 'Amaka');
+      expect(appUser.role, 'owner');
+      expect(repository.currentUser?.uid, uid);
+      expect(repository.activeFirestore, same(firestore));
+      expect(
+        repository.pendingSignUpUser,
+        isNull,
+      ); // now a real AppUser, not just pending
+    });
+
+    test('self-provisions via a matching owner-issued invite when no staff doc exists yet, '
+        'atomically creating the staff doc and consuming the invite', () async {
+      final fbUser = _MockUser();
+      when(() => auth.currentUser).thenReturn(fbUser);
+      when(() => fbUser.uid).thenReturn(uid);
+      when(() => fbUser.email).thenReturn(email);
+      when(() => fbUser.reload()).thenAnswer((_) async {
+        when(() => fbUser.emailVerified).thenReturn(true);
+      });
+      when(() => fbUser.getIdToken(any()))
+          .thenAnswer((_) async => 'fake-token');
+      when(() => fbUser.emailVerified).thenReturn(false);
+
+      when(() => staffSnapshot.exists).thenReturn(false);
+      when(() => staffSnapshot.data()).thenReturn(null);
+      when(() => inviteSnapshot.exists).thenReturn(true);
+      when(() => inviteSnapshot.data())
+          .thenReturn({'name': 'First Owner', 'role': 'owner'});
+
+      final appUser = await repository.completeSignUp();
+
+      expect(appUser.name, 'First Owner');
+      expect(appUser.role, 'owner');
+      expect(appUser.phone, isNull);
+      verify(
+        () => batch.set(staffRef, {
+          'name': 'First Owner',
           'role': 'owner',
           'active': true,
-          'phone': '08000000000',
-        });
-
-        final appUser = await repository.completeSignUp();
-
-        expect(appUser.uid, uid);
-        expect(appUser.name, 'Amaka');
-        expect(appUser.role, 'owner');
-        expect(repository.currentUser?.uid, uid);
-        expect(repository.activeFirestore, same(firestore));
-        expect(repository.pendingSignUpUser, isNull); // now a real AppUser, not just pending
-      },
-    );
-
-    test(
-      'self-provisions via a matching owner-issued invite when no staff doc exists yet, '
-      'atomically creating the staff doc and consuming the invite',
-      () async {
-        final fbUser = _MockUser();
-        when(() => auth.currentUser).thenReturn(fbUser);
-        when(() => fbUser.uid).thenReturn(uid);
-        when(() => fbUser.email).thenReturn(email);
-        when(() => fbUser.reload()).thenAnswer((_) async {
-          when(() => fbUser.emailVerified).thenReturn(true);
-        });
-        when(() => fbUser.emailVerified).thenReturn(false);
-
-        when(() => staffSnapshot.exists).thenReturn(false);
-        when(() => staffSnapshot.data()).thenReturn(null);
-        when(() => inviteSnapshot.exists).thenReturn(true);
-        when(() => inviteSnapshot.data()).thenReturn({'name': 'First Owner', 'role': 'owner'});
-
-        final appUser = await repository.completeSignUp();
-
-        expect(appUser.name, 'First Owner');
-        expect(appUser.role, 'owner');
-        expect(appUser.phone, isNull);
-        verify(() => batch.set(staffRef, {'name': 'First Owner', 'role': 'owner', 'active': true})).called(1);
-        verify(() => batch.delete(inviteRef)).called(1);
-        verify(() => batch.commit()).called(1);
-      },
-    );
+        }),
+      ).called(1);
+      verify(() => batch.delete(inviteRef)).called(1);
+      verify(() => batch.commit()).called(1);
+    });
 
     test('throws StaffRecordNotFoundException when verified but there is no staff doc and no matching invite', () async {
       final fbUser = _MockUser();
@@ -201,6 +227,8 @@ void main() {
       when(() => fbUser.reload()).thenAnswer((_) async {
         when(() => fbUser.emailVerified).thenReturn(true);
       });
+      when(() => fbUser.getIdToken(any()))
+          .thenAnswer((_) async => 'fake-token');
       when(() => fbUser.emailVerified).thenReturn(false);
 
       when(() => staffSnapshot.exists).thenReturn(false);
@@ -208,7 +236,10 @@ void main() {
       when(() => inviteSnapshot.exists).thenReturn(false);
       when(() => inviteSnapshot.data()).thenReturn(null);
 
-      await expectLater(repository.completeSignUp, throwsA(isA<StaffRecordNotFoundException>()));
+      await expectLater(
+        repository.completeSignUp,
+        throwsA(isA<StaffRecordNotFoundException>()),
+      );
       expect(repository.currentUser, isNull);
       verifyNever(() => batch.commit());
     });
@@ -221,12 +252,18 @@ void main() {
       when(() => fbUser.reload()).thenAnswer((_) async {
         when(() => fbUser.emailVerified).thenReturn(true);
       });
+      when(() => fbUser.getIdToken(any()))
+          .thenAnswer((_) async => 'fake-token');
       when(() => fbUser.emailVerified).thenReturn(false);
 
       when(() => staffSnapshot.exists).thenReturn(true);
-      when(() => staffSnapshot.data()).thenReturn({'name': 'Amaka', 'role': 'owner', 'active': false});
+      when(() => staffSnapshot.data())
+          .thenReturn({'name': 'Amaka', 'role': 'owner', 'active': false});
 
-      await expectLater(repository.completeSignUp, throwsA(isA<StaffRecordNotFoundException>()));
+      await expectLater(
+        repository.completeSignUp,
+        throwsA(isA<StaffRecordNotFoundException>()),
+      );
       verifyNever(() => inviteRef.get());
     });
   });
@@ -237,12 +274,17 @@ void main() {
       final fbUser = _MockUser();
       when(() => fbUser.uid).thenReturn(uid);
       when(() => credential.user).thenReturn(fbUser);
-      when(() => auth.signInWithEmailAndPassword(email: email, password: password))
-          .thenAnswer((_) async => credential);
+      when(
+        () => auth.signInWithEmailAndPassword(email: email, password: password),
+      ).thenAnswer((_) async => credential);
       when(() => staffSnapshot.exists).thenReturn(true);
-      when(() => staffSnapshot.data()).thenReturn({'name': 'Amaka', 'role': 'owner', 'active': true});
+      when(() => staffSnapshot.data())
+          .thenReturn({'name': 'Amaka', 'role': 'owner', 'active': true});
 
-      final appUser = await repository.signIn(email: '  Owner@Example.com  ', password: password);
+      final appUser = await repository.signIn(
+        email: '  Owner@Example.com  ',
+        password: password,
+      );
 
       expect(appUser.uid, uid);
       expect(repository.currentUser?.uid, uid);
@@ -254,8 +296,9 @@ void main() {
       final fbUser = _MockUser();
       when(() => fbUser.uid).thenReturn(uid);
       when(() => credential.user).thenReturn(fbUser);
-      when(() => auth.signInWithEmailAndPassword(email: email, password: password))
-          .thenAnswer((_) async => credential);
+      when(
+        () => auth.signInWithEmailAndPassword(email: email, password: password),
+      ).thenAnswer((_) async => credential);
       when(() => staffSnapshot.exists).thenReturn(false);
       when(() => staffSnapshot.data()).thenReturn(null);
       when(() => inviteSnapshot.exists).thenReturn(false);
@@ -268,29 +311,49 @@ void main() {
       expect(repository.currentUser, isNull);
     });
 
-    test('lets FirebaseAuthException (e.g. wrong password) propagate as-is', () async {
-      when(() => auth.signInWithEmailAndPassword(email: email, password: password))
-          .thenThrow(fb_auth.FirebaseAuthException(code: 'wrong-password'));
+    test(
+      'lets FirebaseAuthException (e.g. wrong password) propagate as-is',
+      () async {
+        when(
+          () =>
+              auth.signInWithEmailAndPassword(email: email, password: password),
+        ).thenThrow(fb_auth.FirebaseAuthException(code: 'wrong-password'));
 
-      await expectLater(
-        () => repository.signIn(email: email, password: password),
-        throwsA(isA<fb_auth.FirebaseAuthException>()),
-      );
-    });
+        await expectLater(
+          () => repository.signIn(email: email, password: password),
+          throwsA(isA<fb_auth.FirebaseAuthException>()),
+        );
+      },
+    );
   });
 
   group('unsupported members — this repository no longer uses PIN or email-link sign-in', () {
     test('PIN-only methods throw UnsupportedError', () {
-      expect(() => repository.isDeviceVerifiedFor(email), throwsUnsupportedError);
-      expect(() => repository.signInWithEmailAndPin(email: email, pin: '1234'), throwsUnsupportedError);
-      expect(() => repository.setPinForVerifiedDevice(email: email, pin: '1234'), throwsUnsupportedError);
+      expect(
+        () => repository.isDeviceVerifiedFor(email),
+        throwsUnsupportedError,
+      );
+      expect(
+        () => repository.signInWithEmailAndPin(email: email, pin: '1234'),
+        throwsUnsupportedError,
+      );
+      expect(
+        () => repository.setPinForVerifiedDevice(email: email, pin: '1234'),
+        throwsUnsupportedError,
+      );
     });
 
     test('email-link methods throw UnsupportedError', () {
-      expect(() => repository.sendVerificationLink(email), throwsUnsupportedError);
+      expect(
+        () => repository.sendVerificationLink(email),
+        throwsUnsupportedError,
+      );
       expect(repository.pendingVerificationEmail, throwsUnsupportedError);
       expect(
-        () => repository.completeEmailLinkSignIn(email: email, emailLink: 'https://example.com/'),
+        () => repository.completeEmailLinkSignIn(
+          email: email,
+          emailLink: 'https://example.com/',
+        ),
         throwsUnsupportedError,
       );
     });
@@ -303,10 +366,12 @@ void main() {
       final fbUser = _MockUser();
       when(() => fbUser.uid).thenReturn(uid);
       when(() => credential.user).thenReturn(fbUser);
-      when(() => auth.signInWithEmailAndPassword(email: email, password: password))
-          .thenAnswer((_) async => credential);
+      when(
+        () => auth.signInWithEmailAndPassword(email: email, password: password),
+      ).thenAnswer((_) async => credential);
       when(() => staffSnapshot.exists).thenReturn(true);
-      when(() => staffSnapshot.data()).thenReturn({'name': 'Amaka', 'role': 'owner', 'active': true});
+      when(() => staffSnapshot.data())
+          .thenReturn({'name': 'Amaka', 'role': 'owner', 'active': true});
       await repository.signIn(email: email, password: password);
       expect(repository.currentUser, isNotNull);
 

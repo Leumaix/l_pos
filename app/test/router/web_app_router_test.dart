@@ -42,7 +42,6 @@ class _MockDocumentSnapshot extends Mock
 void main() {
   setUpAll(() {
     registerFallbackValue(_MockDocumentReference());
-    registerFallbackValue(fb_auth.Persistence.NONE);
   });
 
   Future<void> settle(WidgetTester tester) async {
@@ -60,29 +59,31 @@ void main() {
   late _MockDocumentReference staffRef;
   late _MockDocumentSnapshot staffSnapshot;
 
-  Widget appWithFakes({required FakeShiftRepository shift, required String role}) {
-    when(() => firestore.doc('businesses/ph-zazaa/staff/$uid')).thenReturn(staffRef);
+  Widget appWithFakes({
+    required FakeShiftRepository shift,
+    required String role,
+  }) {
+    when(() => firestore.doc('businesses/ph-zazaa/staff/$uid'))
+        .thenReturn(staffRef);
     when(() => staffRef.get()).thenAnswer((_) async => staffSnapshot);
     when(() => staffSnapshot.exists).thenReturn(true);
-    when(() => staffSnapshot.data()).thenReturn({'name': 'Amaka', 'role': role, 'active': true});
+    when(() => staffSnapshot.data())
+        .thenReturn({'name': 'Amaka', 'role': role, 'active': true});
 
-    // Constructed here, inside the testWidgets body's own zone — not in
-    // setUp(), which runs outside the fake-async pump-driven environment
-    // testWidgets uses. WebAuthRepository's constructor kicks off
-    // _persistenceReady (auth.setPersistence(...)); a Future created in
-    // setUp()'s zone never gets "seen" as resolved by this test's own
-    // pump loop, so signIn()/signUp() awaiting it would hang forever —
-    // confirmed by chasing exactly that hang down before this fix.
     final webAuthRepo = WebAuthRepository(auth: auth, firestore: firestore);
 
     return ProviderScope(
       overrides: [
         webAuthRepositoryProvider.overrideWithValue(webAuthRepo),
-        authRepositoryProvider.overrideWith((ref) => ref.watch(webAuthRepositoryProvider)),
+        authRepositoryProvider.overrideWith(
+          (ref) => ref.watch(webAuthRepositoryProvider),
+        ),
         // Same fakes shift_gating_router_test.dart uses for the mobile
         // router — dashboardSummaryProvider reads through these, never
         // through the mocked Firestore above, so Home renders safely.
-        inventoryRepositoryProvider.overrideWithValue(FakeInventoryRepository()),
+        inventoryRepositoryProvider.overrideWithValue(
+          FakeInventoryRepository(),
+        ),
         salesRepositoryProvider.overrideWithValue(FakeSalesRepository()),
         customerRepositoryProvider.overrideWithValue(FakeCustomerRepository()),
         shiftRepositoryProvider.overrideWithValue(shift),
@@ -96,8 +97,9 @@ void main() {
     final fbUser = _MockUser();
     when(() => fbUser.uid).thenReturn(uid);
     when(() => credential.user).thenReturn(fbUser);
-    when(() => auth.signInWithEmailAndPassword(email: email, password: password))
-        .thenAnswer((_) async => credential);
+    when(
+      () => auth.signInWithEmailAndPassword(email: email, password: password),
+    ).thenAnswer((_) async => credential);
 
     final fields = find.byType(TextField);
     await tester.enterText(fields.at(0), email);
@@ -114,59 +116,87 @@ void main() {
     staffRef = _MockDocumentReference();
     staffSnapshot = _MockDocumentSnapshot();
 
-    when(() => auth.setPersistence(any())).thenAnswer((_) async {});
     when(() => auth.currentUser).thenReturn(null);
+    // WebAuthController._resumeSession awaits WebAuthRepository.authReady
+    // (backed by authStateChanges().first) before trusting currentUser —
+    // see that method's doc comment. Evaluated lazily so it reflects
+    // whatever auth.currentUser is stubbed to at the moment it's read.
+    when(() => auth.authStateChanges())
+        .thenAnswer((_) => Stream.value(auth.currentUser));
   });
 
-  testWidgets('an unauthenticated visitor sees WebLoginScreen (email+password), not the PIN keypad', (tester) async {
-    final shift = FakeShiftRepository(openShift: false);
-    await tester.pumpWidget(appWithFakes(shift: shift, role: 'owner'));
-    await settle(tester);
+  testWidgets(
+    'an unauthenticated visitor sees WebLoginScreen (email+password), not the PIN keypad',
+    (tester) async {
+      final shift = FakeShiftRepository(openShift: false);
+      await tester.pumpWidget(appWithFakes(shift: shift, role: 'owner'));
+      await settle(tester);
 
-    expect(find.text('Sign in with your email and password.'), findsOneWidget);
-    expect(find.text('Sign in'), findsOneWidget);
-    expect(find.byType(TextField), findsNWidgets(2)); // email + password
-    expect(find.byIcon(Icons.dialpad), findsNothing); // no PIN keypad anywhere on this build
-  });
+      expect(
+        find.text('Sign in with your email and password.'),
+        findsOneWidget,
+      );
+      expect(find.text('Sign in'), findsOneWidget);
+      expect(find.byType(TextField), findsNWidgets(2)); // email + password
+      expect(
+        find.byIcon(Icons.dialpad),
+        findsNothing,
+      ); // no PIN keypad anywhere on this build
+    },
+  );
 
-  testWidgets('signing in reaches Home, reusing the exact same screen as mobile', (tester) async {
-    final shift = FakeShiftRepository(openShift: false);
-    await tester.pumpWidget(appWithFakes(shift: shift, role: 'owner'));
-    await settle(tester);
+  testWidgets(
+    'signing in reaches Home, reusing the exact same screen as mobile',
+    (tester) async {
+      final shift = FakeShiftRepository(openShift: false);
+      await tester.pumpWidget(appWithFakes(shift: shift, role: 'owner'));
+      await settle(tester);
 
-    await signIn(tester);
+      await signIn(tester);
 
-    expect(find.text('Quick actions'), findsOneWidget);
-  });
+      expect(find.text('Quick actions'), findsOneWidget);
+    },
+  );
 
-  testWidgets('an attendant is bounced away from /stock (owner-only) — same rule as the mobile router', (tester) async {
-    final shift = FakeShiftRepository(openShift: false);
-    await tester.pumpWidget(appWithFakes(shift: shift, role: 'attendant'));
-    await settle(tester);
-    await signIn(tester);
+  testWidgets(
+    'an attendant is bounced away from /stock (owner-only) — same rule as the mobile router',
+    (tester) async {
+      final shift = FakeShiftRepository(openShift: false);
+      await tester.pumpWidget(appWithFakes(shift: shift, role: 'attendant'));
+      await settle(tester);
+      await signIn(tester);
 
-    final context = tester.element(find.byType(Scaffold).first);
-    GoRouter.of(context).go('/stock');
-    await settle(tester);
+      final context = tester.element(find.byType(Scaffold).first);
+      GoRouter.of(context).go('/stock');
+      await settle(tester);
 
-    expect(find.text('Quick actions'), findsOneWidget); // bounced back to Home, never reached Stock
-  });
+      expect(
+        find.text('Quick actions'),
+        findsOneWidget,
+      ); // bounced back to Home, never reached Stock
+    },
+  );
 
-  testWidgets('navigating to /sell with no shift open is redirected to Home — same rule as the mobile router', (tester) async {
-    final shift = FakeShiftRepository(openShift: false);
-    await tester.pumpWidget(appWithFakes(shift: shift, role: 'owner'));
-    await settle(tester);
-    await signIn(tester);
+  testWidgets(
+    'navigating to /sell with no shift open is redirected to Home — same rule as the mobile router',
+    (tester) async {
+      final shift = FakeShiftRepository(openShift: false);
+      await tester.pumpWidget(appWithFakes(shift: shift, role: 'owner'));
+      await settle(tester);
+      await signIn(tester);
 
-    final context = tester.element(find.byType(Scaffold).first);
-    GoRouter.of(context).go('/sell');
-    await settle(tester);
+      final context = tester.element(find.byType(Scaffold).first);
+      GoRouter.of(context).go('/sell');
+      await settle(tester);
 
-    expect(find.text('The day hasn\'t been opened yet'), findsOneWidget);
-    expect(find.text('Cart'), findsNothing);
-  });
+      expect(find.text('The day hasn\'t been opened yet'), findsOneWidget);
+      expect(find.text('Cart'), findsNothing);
+    },
+  );
 
-  testWidgets('navigating to /sell with a shift open reaches Sell normally', (tester) async {
+  testWidgets('navigating to /sell with a shift open reaches Sell normally', (
+    tester,
+  ) async {
     final shift = FakeShiftRepository(); // openShift: true by default
     await tester.pumpWidget(appWithFakes(shift: shift, role: 'owner'));
     await settle(tester);

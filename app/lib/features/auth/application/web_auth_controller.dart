@@ -82,7 +82,15 @@ class WebAuthController extends StateNotifier<WebAuthState> {
   /// reused here as the resume path, not just the sign-up path, so a
   /// verified, already-provisioned account lands straight on done rather
   /// than being shown "check your email" again.
+  ///
+  /// Awaits [WebAuthRepository.authReady] first — without it, this races
+  /// Firebase Auth's own async restore of whatever session IndexedDB had
+  /// and reads `currentUser` before that restore lands, silently losing
+  /// a real, still-persisted session back to a blank form. Confirmed
+  /// live against the Auth emulator: removing this wait reproduced
+  /// exactly that failure on every browser close/reopen.
   Future<void> _resumeSession() async {
+    await _repository.authReady;
     if (_repository.currentUser != null) {
       state = state.copyWith(stage: WebAuthStage.done);
       return;
@@ -93,12 +101,18 @@ class WebAuthController extends StateNotifier<WebAuthState> {
     // lands on awaitingVerification below — otherwise state.email is
     // whatever it started as (empty), since the form was never visited
     // this session.
-    state = state.copyWith(email: pending.email ?? '', stage: WebAuthStage.completingSignUp);
+    state = state.copyWith(
+      email: pending.email ?? '',
+      stage: WebAuthStage.completingSignUp,
+    );
     try {
       await _repository.completeSignUp();
       state = state.copyWith(stage: WebAuthStage.done);
     } on EmailNotVerifiedException {
-      state = state.copyWith(stage: WebAuthStage.awaitingVerification, clearError: true);
+      state = state.copyWith(
+        stage: WebAuthStage.awaitingVerification,
+        clearError: true,
+      );
     } catch (_) {
       // Something genuinely wrong with this session (staff record
       // deactivated since, etc.) — don't trap them on a resume that can
@@ -107,12 +121,17 @@ class WebAuthController extends StateNotifier<WebAuthState> {
     }
   }
 
-  void setEmail(String email) => state = state.copyWith(email: email, clearError: true);
+  void setEmail(String email) =>
+      state = state.copyWith(email: email, clearError: true);
 
-  void setPassword(String password) => state = state.copyWith(password: password, clearError: true);
+  void setPassword(String password) =>
+      state = state.copyWith(password: password, clearError: true);
 
-  void toggleSignUpMode() =>
-      state = state.copyWith(isSignUpMode: !state.isSignUpMode, password: '', clearError: true);
+  void toggleSignUpMode() => state = state.copyWith(
+    isSignUpMode: !state.isSignUpMode,
+    password: '',
+    clearError: true,
+  );
 
   Future<void> signIn() async {
     final email = state.email.trim();
@@ -124,7 +143,10 @@ class WebAuthController extends StateNotifier<WebAuthState> {
       await _repository.signIn(email: email, password: password);
       state = state.copyWith(stage: WebAuthStage.done);
     } catch (e) {
-      state = state.copyWith(stage: WebAuthStage.form, errorMessage: 'Could not sign in — $e');
+      state = state.copyWith(
+        stage: WebAuthStage.form,
+        errorMessage: 'Could not sign in — $e',
+      );
     }
   }
 
@@ -138,7 +160,10 @@ class WebAuthController extends StateNotifier<WebAuthState> {
       await _repository.signUp(email: email, password: password);
       state = state.copyWith(stage: WebAuthStage.awaitingVerification);
     } catch (e) {
-      state = state.copyWith(stage: WebAuthStage.form, errorMessage: 'Could not create the account — $e');
+      state = state.copyWith(
+        stage: WebAuthStage.form,
+        errorMessage: 'Could not create the account — $e',
+      );
     }
   }
 
@@ -154,7 +179,10 @@ class WebAuthController extends StateNotifier<WebAuthState> {
   /// link. Finishes self-provisioning only if Firebase's own record
   /// (reloaded fresh) genuinely shows verified.
   Future<void> checkVerificationAndContinue() async {
-    state = state.copyWith(stage: WebAuthStage.completingSignUp, clearError: true);
+    state = state.copyWith(
+      stage: WebAuthStage.completingSignUp,
+      clearError: true,
+    );
     try {
       await _repository.completeSignUp();
       state = state.copyWith(stage: WebAuthStage.done);
@@ -164,7 +192,10 @@ class WebAuthController extends StateNotifier<WebAuthState> {
         errorMessage: 'Not verified yet — click the link in the email first, then try again.',
       );
     } catch (e) {
-      state = state.copyWith(stage: WebAuthStage.form, errorMessage: 'Could not finish sign-up — $e');
+      state = state.copyWith(
+        stage: WebAuthStage.form,
+        errorMessage: 'Could not finish sign-up — $e',
+      );
     }
   }
 
@@ -176,8 +207,11 @@ class WebAuthController extends StateNotifier<WebAuthState> {
 
 // Real by default; tests override with a stubbed WebAuthRepository (see
 // web_auth_repository_test.dart / web_auth_controller_test.dart).
-final webAuthRepositoryProvider = Provider<WebAuthRepository>((ref) => WebAuthRepository());
-
-final webAuthControllerProvider = StateNotifierProvider<WebAuthController, WebAuthState>(
-  (ref) => WebAuthController(ref.watch(webAuthRepositoryProvider)),
+final webAuthRepositoryProvider = Provider<WebAuthRepository>(
+  (ref) => WebAuthRepository(),
 );
+
+final webAuthControllerProvider =
+    StateNotifierProvider<WebAuthController, WebAuthState>(
+      (ref) => WebAuthController(ref.watch(webAuthRepositoryProvider)),
+    );

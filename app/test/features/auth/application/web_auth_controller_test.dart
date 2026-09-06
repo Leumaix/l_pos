@@ -23,7 +23,6 @@ class _MockDocumentSnapshot extends Mock
 void main() {
   setUpAll(() {
     registerFallbackValue(_MockDocumentReference());
-    registerFallbackValue(fb_auth.Persistence.NONE);
   });
 
   late _MockFirebaseAuth auth;
@@ -43,10 +42,19 @@ void main() {
     staffRef = _MockDocumentReference();
     staffSnapshot = _MockDocumentSnapshot();
 
-    when(() => auth.setPersistence(any())).thenAnswer((_) async {});
-    when(() => firestore.doc('businesses/ph-zazaa/staff/$uid')).thenReturn(staffRef);
+    when(() => firestore.doc('businesses/ph-zazaa/staff/$uid'))
+        .thenReturn(staffRef);
     when(() => staffRef.get()).thenAnswer((_) async => staffSnapshot);
     when(() => auth.currentUser).thenReturn(null);
+    // Real Firebase Auth's authStateChanges() only fires once its async
+    // restore of any persisted session settles — WebAuthController._resumeSession
+    // awaits its first emission before trusting currentUser (see that
+    // method's own doc comment for why). Evaluated lazily inside the
+    // closure so it reflects whatever auth.currentUser is stubbed to at
+    // the moment each WebAuthController is actually constructed, not a
+    // snapshot taken here.
+    when(() => auth.authStateChanges())
+        .thenAnswer((_) => Stream.value(auth.currentUser));
 
     repository = WebAuthRepository(auth: auth, firestore: firestore);
     controller = WebAuthController(repository);
@@ -60,20 +68,27 @@ void main() {
     expect(controller.state.errorMessage, isNull);
   });
 
-  test('a browser reload while already fully signed in lands straight on done', () async {
-    final credential = _MockUserCredential();
-    final fbUser = _MockUser();
-    when(() => fbUser.uid).thenReturn(uid);
-    when(() => credential.user).thenReturn(fbUser);
-    when(() => auth.signInWithEmailAndPassword(email: email, password: password))
-        .thenAnswer((_) async => credential);
-    when(() => staffSnapshot.exists).thenReturn(true);
-    when(() => staffSnapshot.data()).thenReturn({'name': 'Amaka', 'role': 'owner', 'active': true});
-    await repository.signIn(email: email, password: password);
+  test(
+    'a browser reload while already fully signed in lands straight on done',
+    () async {
+      final credential = _MockUserCredential();
+      final fbUser = _MockUser();
+      when(() => fbUser.uid).thenReturn(uid);
+      when(() => credential.user).thenReturn(fbUser);
+      when(
+        () => auth.signInWithEmailAndPassword(email: email, password: password),
+      ).thenAnswer((_) async => credential);
+      when(() => staffSnapshot.exists).thenReturn(true);
+      when(() => staffSnapshot.data())
+          .thenReturn({'name': 'Amaka', 'role': 'owner', 'active': true});
+      await repository.signIn(email: email, password: password);
 
-    final reloaded = WebAuthController(repository);
-    expect(reloaded.state.stage, WebAuthStage.done);
-  });
+      final reloaded = WebAuthController(repository);
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+      expect(reloaded.state.stage, WebAuthStage.done);
+    },
+  );
 
   test(
     'a browser reload mid-signup (account created, not yet verified) resumes on '
@@ -83,8 +98,12 @@ void main() {
       final signUpCredential = _MockUserCredential();
       when(() => fbUser.sendEmailVerification()).thenAnswer((_) async {});
       when(() => signUpCredential.user).thenReturn(fbUser);
-      when(() => auth.createUserWithEmailAndPassword(email: email, password: password))
-          .thenAnswer((_) async => signUpCredential);
+      when(
+        () => auth.createUserWithEmailAndPassword(
+          email: email,
+          password: password,
+        ),
+      ).thenAnswer((_) async => signUpCredential);
       await repository.signUp(email: email, password: password);
       // Now that an account exists, currentUser reflects it for the
       // NEXT controller's construction-time resume check — still
@@ -94,6 +113,8 @@ void main() {
       when(() => auth.currentUser).thenReturn(fbUser);
       when(() => fbUser.email).thenReturn(email);
       when(() => fbUser.reload()).thenAnswer((_) async {});
+      when(() => fbUser.getIdToken(any()))
+          .thenAnswer((_) async => 'fake-token');
       when(() => fbUser.emailVerified).thenReturn(false);
 
       final reloaded = WebAuthController(repository);
@@ -104,30 +125,34 @@ void main() {
     },
   );
 
-  test(
-    'a browser reload with a verified-but-not-yet-resumed session (real close/reopen scenario) '
-    'lands straight on done, not awaitingVerification — this is the actual persistence guarantee',
-    () async {
-      final fbUser = _MockUser();
-      when(() => auth.currentUser).thenReturn(fbUser);
-      when(() => fbUser.uid).thenReturn(uid);
-      when(() => fbUser.email).thenReturn(email);
-      when(() => fbUser.reload()).thenAnswer((_) async {});
-      when(() => fbUser.emailVerified).thenReturn(true); // already verified before the browser closed
-      when(() => staffSnapshot.exists).thenReturn(true);
-      when(() => staffSnapshot.data()).thenReturn({'name': 'Amaka', 'role': 'owner', 'active': true});
+  test('a browser reload with a verified-but-not-yet-resumed session (real close/reopen scenario) '
+      'lands straight on done, not awaitingVerification — this is the actual persistence guarantee', () async {
+    final fbUser = _MockUser();
+    when(() => auth.currentUser).thenReturn(fbUser);
+    when(() => fbUser.uid).thenReturn(uid);
+    when(() => fbUser.email).thenReturn(email);
+    when(() => fbUser.reload()).thenAnswer((_) async {});
+    when(() => fbUser.getIdToken(any())).thenAnswer((_) async => 'fake-token');
+    when(() => fbUser.emailVerified)
+        .thenReturn(true); // already verified before the browser closed
+    when(() => staffSnapshot.exists).thenReturn(true);
+    when(() => staffSnapshot.data())
+        .thenReturn({'name': 'Amaka', 'role': 'owner', 'active': true});
 
-      final reloaded = WebAuthController(repository);
-      await Future<void>.delayed(Duration.zero);
-      await Future<void>.delayed(Duration.zero);
-      expect(reloaded.state.stage, WebAuthStage.done);
-    },
-  );
+    final reloaded = WebAuthController(repository);
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+    expect(reloaded.state.stage, WebAuthStage.done);
+  });
 
   group('setEmail / setPassword / toggleSignUpMode', () {
     test('update their fields and clear any previous error', () async {
-      when(() => auth.signInWithEmailAndPassword(email: any(named: 'email'), password: any(named: 'password')))
-          .thenThrow(fb_auth.FirebaseAuthException(code: 'wrong-password'));
+      when(
+        () => auth.signInWithEmailAndPassword(
+          email: any(named: 'email'),
+          password: any(named: 'password'),
+        ),
+      ).thenThrow(fb_auth.FirebaseAuthException(code: 'wrong-password'));
       controller.setEmail(email);
       controller.setPassword('wrong');
       await controller.signIn();
@@ -141,15 +166,18 @@ void main() {
       expect(controller.state.password, password);
     });
 
-    test('toggling sign-up mode flips the flag and clears the password field', () {
-      controller.setPassword('something');
-      controller.toggleSignUpMode();
-      expect(controller.state.isSignUpMode, isTrue);
-      expect(controller.state.password, isEmpty);
+    test(
+      'toggling sign-up mode flips the flag and clears the password field',
+      () {
+        controller.setPassword('something');
+        controller.toggleSignUpMode();
+        expect(controller.state.isSignUpMode, isTrue);
+        expect(controller.state.password, isEmpty);
 
-      controller.toggleSignUpMode();
-      expect(controller.state.isSignUpMode, isFalse);
-    });
+        controller.toggleSignUpMode();
+        expect(controller.state.isSignUpMode, isFalse);
+      },
+    );
   });
 
   group('signIn', () {
@@ -159,7 +187,10 @@ void main() {
       await controller.signIn();
       expect(controller.state.stage, WebAuthStage.form);
       verifyNever(
-        () => auth.signInWithEmailAndPassword(email: any(named: 'email'), password: any(named: 'password')),
+        () => auth.signInWithEmailAndPassword(
+          email: any(named: 'email'),
+          password: any(named: 'password'),
+        ),
       );
     });
 
@@ -168,10 +199,12 @@ void main() {
       final fbUser = _MockUser();
       when(() => fbUser.uid).thenReturn(uid);
       when(() => credential.user).thenReturn(fbUser);
-      when(() => auth.signInWithEmailAndPassword(email: email, password: password))
-          .thenAnswer((_) async => credential);
+      when(
+        () => auth.signInWithEmailAndPassword(email: email, password: password),
+      ).thenAnswer((_) async => credential);
       when(() => staffSnapshot.exists).thenReturn(true);
-      when(() => staffSnapshot.data()).thenReturn({'name': 'Amaka', 'role': 'owner', 'active': true});
+      when(() => staffSnapshot.data())
+          .thenReturn({'name': 'Amaka', 'role': 'owner', 'active': true});
 
       controller.setEmail(email);
       controller.setPassword(password);
@@ -181,17 +214,27 @@ void main() {
       expect(controller.state.errorMessage, isNull);
     });
 
-    test('falls back to the form stage with an honest error on wrong credentials', () async {
-      when(() => auth.signInWithEmailAndPassword(email: email, password: password))
-          .thenThrow(fb_auth.FirebaseAuthException(code: 'wrong-password', message: 'The password is invalid'));
+    test(
+      'falls back to the form stage with an honest error on wrong credentials',
+      () async {
+        when(
+          () =>
+              auth.signInWithEmailAndPassword(email: email, password: password),
+        ).thenThrow(
+          fb_auth.FirebaseAuthException(
+            code: 'wrong-password',
+            message: 'The password is invalid',
+          ),
+        );
 
-      controller.setEmail(email);
-      controller.setPassword(password);
-      await controller.signIn();
+        controller.setEmail(email);
+        controller.setPassword(password);
+        await controller.signIn();
 
-      expect(controller.state.stage, WebAuthStage.form);
-      expect(controller.state.errorMessage, contains('wrong-password'));
-    });
+        expect(controller.state.stage, WebAuthStage.form);
+        expect(controller.state.errorMessage, contains('wrong-password'));
+      },
+    );
   });
 
   group('signUp', () {
@@ -200,7 +243,10 @@ void main() {
       await controller.signUp();
       expect(controller.state.stage, WebAuthStage.form);
       verifyNever(
-        () => auth.createUserWithEmailAndPassword(email: any(named: 'email'), password: any(named: 'password')),
+        () => auth.createUserWithEmailAndPassword(
+          email: any(named: 'email'),
+          password: any(named: 'password'),
+        ),
       );
     });
 
@@ -209,8 +255,12 @@ void main() {
       final credential = _MockUserCredential();
       when(() => fbUser.sendEmailVerification()).thenAnswer((_) async {});
       when(() => credential.user).thenReturn(fbUser);
-      when(() => auth.createUserWithEmailAndPassword(email: email, password: password))
-          .thenAnswer((_) async => credential);
+      when(
+        () => auth.createUserWithEmailAndPassword(
+          email: email,
+          password: password,
+        ),
+      ).thenAnswer((_) async => credential);
 
       controller.setEmail(email);
       controller.setPassword(password);
@@ -221,8 +271,12 @@ void main() {
     });
 
     test('falls back to the form stage with an honest error when the email is already in use', () async {
-      when(() => auth.createUserWithEmailAndPassword(email: email, password: password))
-          .thenThrow(fb_auth.FirebaseAuthException(code: 'email-already-in-use'));
+      when(
+        () => auth.createUserWithEmailAndPassword(
+          email: email,
+          password: password,
+        ),
+      ).thenThrow(fb_auth.FirebaseAuthException(code: 'email-already-in-use'));
 
       controller.setEmail(email);
       controller.setPassword(password);
@@ -239,8 +293,12 @@ void main() {
       final credential = _MockUserCredential();
       when(() => fbUser.sendEmailVerification()).thenAnswer((_) async {});
       when(() => credential.user).thenReturn(fbUser);
-      when(() => auth.createUserWithEmailAndPassword(email: email, password: password))
-          .thenAnswer((_) async => credential);
+      when(
+        () => auth.createUserWithEmailAndPassword(
+          email: email,
+          password: password,
+        ),
+      ).thenAnswer((_) async => credential);
       controller.setEmail(email);
       controller.setPassword(password);
       await controller.signUp();
@@ -251,34 +309,48 @@ void main() {
       when(() => fbUser.reload()).thenAnswer((_) async {
         when(() => fbUser.emailVerified).thenReturn(true);
       });
+      when(() => fbUser.getIdToken(any()))
+          .thenAnswer((_) async => 'fake-token');
       when(() => fbUser.emailVerified).thenReturn(false);
     }
 
-    test('reaches done once Firebase confirms the reloaded user is verified', () async {
-      await signUpFirst();
-      when(() => staffSnapshot.exists).thenReturn(true);
-      when(() => staffSnapshot.data()).thenReturn({'name': 'Amaka', 'role': 'owner', 'active': true});
+    test(
+      'reaches done once Firebase confirms the reloaded user is verified',
+      () async {
+        await signUpFirst();
+        when(() => staffSnapshot.exists).thenReturn(true);
+        when(() => staffSnapshot.data())
+            .thenReturn({'name': 'Amaka', 'role': 'owner', 'active': true});
 
-      await controller.checkVerificationAndContinue();
+        await controller.checkVerificationAndContinue();
 
-      expect(controller.state.stage, WebAuthStage.done);
-      expect(controller.state.errorMessage, isNull);
-    });
+        expect(controller.state.stage, WebAuthStage.done);
+        expect(controller.state.errorMessage, isNull);
+      },
+    );
 
     test('stays on awaitingVerification with a clear message when not actually verified yet', () async {
       final fbUser = _MockUser();
       final credential = _MockUserCredential();
       when(() => fbUser.sendEmailVerification()).thenAnswer((_) async {});
       when(() => credential.user).thenReturn(fbUser);
-      when(() => auth.createUserWithEmailAndPassword(email: email, password: password))
-          .thenAnswer((_) async => credential);
+      when(
+        () => auth.createUserWithEmailAndPassword(
+          email: email,
+          password: password,
+        ),
+      ).thenAnswer((_) async => credential);
       controller.setEmail(email);
       controller.setPassword(password);
       await controller.signUp();
 
       when(() => auth.currentUser).thenReturn(fbUser);
       when(() => fbUser.reload()).thenAnswer((_) async {});
-      when(() => fbUser.emailVerified).thenReturn(false); // reload didn't change anything — still unverified
+      when(() => fbUser.getIdToken(any()))
+          .thenAnswer((_) async => 'fake-token');
+      when(
+        () => fbUser.emailVerified,
+      ).thenReturn(false); // reload didn't change anything — still unverified
 
       await controller.checkVerificationAndContinue();
 
@@ -288,13 +360,17 @@ void main() {
   });
 
   group('resendVerificationEmail', () {
-    test('surfaces an honest error if it fails, without changing stage', () async {
-      when(() => auth.currentUser).thenReturn(null); // nobody signed in -> StateError inside the repo
+    test(
+      'surfaces an honest error if it fails, without changing stage',
+      () async {
+        when(() => auth.currentUser)
+            .thenReturn(null); // nobody signed in -> StateError inside the repo
 
-      await controller.resendVerificationEmail();
+        await controller.resendVerificationEmail();
 
-      expect(controller.state.errorMessage, isNotNull);
-    });
+        expect(controller.state.errorMessage, isNotNull);
+      },
+    );
   });
 
   group('signOut', () {
