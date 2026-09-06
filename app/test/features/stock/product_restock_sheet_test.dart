@@ -91,4 +91,76 @@ void main() {
       expect(find.byType(BottomSheet), findsNothing);
     },
   );
+
+  testWidgets(
+    'wide: at the real Itel tablet landscape size, the display and Add to '
+    'stock button stay in the same pane, strictly left of the keypad, and '
+    'the full restock flow still works',
+    (tester) async {
+      // Same real dimensions used throughout the Tier 1/2 landscape
+      // regression tests — see login_screen_wide_test.dart /
+      // payment_screen_wide_test.dart / keypad_entry_layout_test.dart.
+      tester.view.physicalSize = const Size(1280, 800);
+      tester.view.devicePixelRatio = 1.5;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final container = ProviderContainer(
+        overrides: [
+          inventoryRepositoryProvider.overrideWithValue(
+            FakeInventoryRepository(),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(
+            home: Scaffold(
+              body: Builder(
+                builder: (context) => TextButton(
+                  onPressed: () => showProductRestockSheet(context, product),
+                  child: const Text('open sheet'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('open sheet'));
+      await tester.pumpAndSettle();
+
+      final productName = find.text(product.name);
+      final addToStock = find.text('Add to stock');
+      final keypadDigit = find.text('1');
+      expect(productName, findsOneWidget);
+      expect(addToStock, findsOneWidget);
+      expect(keypadDigit, findsOneWidget);
+
+      // The defining property of the wide split: the display and the
+      // action button both sit in the same (left) pane, strictly left
+      // of the keypad's pane — not below it.
+      final productNameX = tester.getTopLeft(productName).dx;
+      final addToStockX = tester.getTopLeft(addToStock).dx;
+      final keypadX = tester.getTopLeft(keypadDigit).dx;
+      expect(productNameX, lessThan(keypadX));
+      expect(addToStockX, lessThan(keypadX));
+
+      final screenHeight =
+          tester.view.physicalSize.height / tester.view.devicePixelRatio;
+      expect(tester.getRect(addToStock).bottom, lessThanOrEqualTo(screenHeight));
+
+      await tester.tap(keypadDigit);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add to stock'));
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      expect(find.text('open sheet'), findsOneWidget);
+      expect(find.byType(BottomSheet), findsNothing);
+    },
+  );
 }
