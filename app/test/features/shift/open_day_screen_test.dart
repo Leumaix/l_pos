@@ -89,4 +89,21 @@ void main() {
     expect(shift.currentShift, isNull);
     expect(find.text('Enter a valid starting float in ₦.'), findsOneWidget);
   });
+
+  testWidgets(
+    'at a 1440x900 desktop surface, the form still stays a sane width — not stretched edge-to-edge',
+    (tester) async {
+      tester.view.physicalSize = const Size(1440, 900);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await pumpSignedInScreen(tester, onOpened: () {});
+
+      final box = tester.widget<ConstrainedBox>(
+        find.byKey(const ValueKey('responsiveCenterConstraint')),
+      );
+      expect(box.constraints.maxWidth, 560);
+    },
+  );
 }

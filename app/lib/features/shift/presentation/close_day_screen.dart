@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/responsive/breakpoints.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_text_styles.dart';
@@ -68,77 +69,86 @@ class CloseDayScreen extends ConsumerWidget {
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(AppSpacing.lg),
-          child: shiftAsync.when(
-            data: (shift) {
-              if (shift == null) {
-                return Text(
-                  'No shift is currently open.',
-                  style: AppTextStyles.secondary(AppTextStyles.bodyMd),
-                );
-              }
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  AppCard(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        _SummaryRow(label: 'Opening float', value: formatNaira(shift.openingFloatNaira)),
-                        _SummaryRow(label: 'Cash sales', value: formatNaira(shift.cashTotalNaira)),
-                        _SummaryRow(label: 'Card sales', value: formatNaira(shift.cardTotalNaira)),
-                        _SummaryRow(label: 'Transfer sales', value: formatNaira(shift.transferTotalNaira)),
-                        _SummaryRow(label: 'Customer account sales', value: formatNaira(shift.creditTotalNaira)),
-                        _SummaryRow(label: 'Sales rung up', value: '${shift.salesCount}', isLast: true),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: AppSpacing.lg),
-                  Text('Count the drawer', style: AppTextStyles.headingSm),
-                  const SizedBox(height: AppSpacing.sm),
-                  Text(
-                    'Only cash sales affect what the drawer should hold — card, transfer, and '
-                    'customer-account sales never put physical cash in it.',
+          // Same reasoning as Open Day: a data-entry form stays a sane,
+          // readable width at every viewport size — no desktopMaxWidth.
+          child: ResponsiveCenter(
+            maxWidth: 560,
+            child: shiftAsync.when(
+              data: (shift) {
+                if (shift == null) {
+                  return Text(
+                    'No shift is currently open.',
                     style: AppTextStyles.secondary(AppTextStyles.bodyMd),
-                  ),
-                  const SizedBox(height: AppSpacing.lg),
-                  AppCard(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Counted cash (₦)', style: AppTextStyles.labelMd),
-                        const SizedBox(height: AppSpacing.xs),
-                        TextField(
-                          enabled: !state.submitting,
-                          keyboardType: TextInputType.number,
-                          onChanged: controller.setCountedCashInput,
-                          decoration: const InputDecoration(hintText: '0'),
-                        ),
-                        const SizedBox(height: AppSpacing.md),
-                        SizedBox(
-                          height: 20,
-                          child: state.errorMessage != null
-                              ? Text(state.errorMessage!, style: AppTextStyles.danger(AppTextStyles.bodySm))
-                              : null,
-                        ),
-                        const SizedBox(height: AppSpacing.md),
-                        AppButton(
-                          label: 'Close the day',
-                          loading: state.submitting,
-                          onPressed: state.countedCashInput.trim().isEmpty
-                              ? null
-                              : () => _handleClose(context, ref),
-                        ),
-                      ],
+                  );
+                }
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    AppCard(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _SummaryRow(label: 'Opening float', value: formatNaira(shift.openingFloatNaira)),
+                          _SummaryRow(label: 'Cash sales', value: formatNaira(shift.cashTotalNaira)),
+                          _SummaryRow(label: 'Card sales', value: formatNaira(shift.cardTotalNaira)),
+                          _SummaryRow(label: 'Transfer sales', value: formatNaira(shift.transferTotalNaira)),
+                          _SummaryRow(
+                            label: 'Customer account sales',
+                            value: formatNaira(shift.creditTotalNaira),
+                          ),
+                          _SummaryRow(label: 'Sales rung up', value: '${shift.salesCount}', isLast: true),
+                        ],
+                      ),
                     ),
-                  ),
-                ],
-              );
-            },
-            loading: () => const Padding(
-              padding: EdgeInsets.symmetric(vertical: AppSpacing.xl),
-              child: Center(child: CircularProgressIndicator(color: AppColors.accent)),
+                    const SizedBox(height: AppSpacing.lg),
+                    Text('Count the drawer', style: AppTextStyles.headingSm),
+                    const SizedBox(height: AppSpacing.sm),
+                    Text(
+                      'Only cash sales affect what the drawer should hold — card, transfer, and '
+                      'customer-account sales never put physical cash in it.',
+                      style: AppTextStyles.secondary(AppTextStyles.bodyMd),
+                    ),
+                    const SizedBox(height: AppSpacing.lg),
+                    AppCard(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Counted cash (₦)', style: AppTextStyles.labelMd),
+                          const SizedBox(height: AppSpacing.xs),
+                          TextField(
+                            enabled: !state.submitting,
+                            keyboardType: TextInputType.number,
+                            onChanged: controller.setCountedCashInput,
+                            decoration: const InputDecoration(hintText: '0'),
+                          ),
+                          const SizedBox(height: AppSpacing.md),
+                          SizedBox(
+                            height: 20,
+                            child: state.errorMessage != null
+                                ? Text(state.errorMessage!, style: AppTextStyles.danger(AppTextStyles.bodySm))
+                                : null,
+                          ),
+                          const SizedBox(height: AppSpacing.md),
+                          AppButton(
+                            label: 'Close the day',
+                            loading: state.submitting,
+                            onPressed: state.countedCashInput.trim().isEmpty
+                                ? null
+                                : () => _handleClose(context, ref),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                );
+              },
+              loading: () => const Padding(
+                padding: EdgeInsets.symmetric(vertical: AppSpacing.xl),
+                child: Center(child: CircularProgressIndicator(color: AppColors.accent)),
+              ),
+              error: (err, _) =>
+                  Text('Could not load the shift', style: AppTextStyles.danger(AppTextStyles.bodyMd)),
             ),
-            error: (err, _) => Text('Could not load the shift', style: AppTextStyles.danger(AppTextStyles.bodyMd)),
           ),
         ),
       ),
