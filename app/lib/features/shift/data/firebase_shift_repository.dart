@@ -49,11 +49,20 @@ class FirebaseShiftRepository implements ShiftRepository {
 
   OpenShift? _openShiftFromData(Map<String, dynamic>? data) {
     if (data == null) return null;
+    final openedAtValue = data['openedAt'];
+    if (openedAtValue is! Timestamp) {
+      // The local optimistic write's FieldValue.serverTimestamp() hasn't
+      // resolved yet — this is the transient pre-confirmation snapshot,
+      // not "no shift open". Treat it as not-resolved-yet (skip emitting
+      // an OpenShift for it) rather than crash; the next snapshot, once
+      // the server assigns the real timestamp, resolves cleanly.
+      return null;
+    }
     return OpenShift(
       openingFloatNaira: (data['openingFloatNaira'] as num).toInt(),
       openedByStaffId: data['openedByStaffId'] as String,
       openedByStaffName: data['openedByStaffName'] as String,
-      openedAt: (data['openedAt'] as Timestamp).toDate(),
+      openedAt: openedAtValue.toDate(),
       cashTotalNaira: (data['cashTotalNaira'] as num).toInt(),
       cardTotalNaira: (data['cardTotalNaira'] as num).toInt(),
       transferTotalNaira: (data['transferTotalNaira'] as num).toInt(),
