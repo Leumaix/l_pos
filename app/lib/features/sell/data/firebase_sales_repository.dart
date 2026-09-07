@@ -1,7 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../../../core/business_config.dart';
-import '../../auth/data/firebase_auth_repository.dart';
+import '../../auth/data/auth_repository.dart';
 import '../domain/sale.dart';
 import 'cart_line_firestore_codec.dart';
 import 'sales_repository.dart';
@@ -15,7 +15,7 @@ import 'sales_repository.dart';
 /// class doesn't itself enforce that, it just reflects what the rules
 /// already allow or deny.
 class FirebaseSalesRepository implements SalesRepository {
-  final FirebaseAuthRepository _firebaseAuth;
+  final AuthRepository _firebaseAuth;
 
   FirebaseSalesRepository(this._firebaseAuth);
 

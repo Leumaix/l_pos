@@ -90,4 +90,80 @@ void main() {
     expect(find.text('open sheet'), findsOneWidget);
     expect(find.byType(BottomSheet), findsNothing);
   });
+
+  testWidgets(
+    'wide: at the real Itel tablet landscape size, the display and Record '
+    'payment button stay in the same pane, strictly left of the keypad, and '
+    'the full repayment flow still works',
+    (tester) async {
+      // Same real dimensions used throughout the Tier 1/2 landscape
+      // regression tests — see login_screen_wide_test.dart /
+      // payment_screen_wide_test.dart / keypad_entry_layout_test.dart.
+      tester.view.physicalSize = const Size(1280, 800);
+      tester.view.devicePixelRatio = 1.5;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final container = ProviderContainer(
+        overrides: [
+          customerRepositoryProvider.overrideWithValue(FakeCustomerRepository()),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(
+            home: Scaffold(
+              body: Builder(
+                builder: (context) => TextButton(
+                  onPressed: () =>
+                      showRepaymentSheet(context, customer: customer),
+                  child: const Text('open sheet'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('open sheet'));
+      await tester.pumpAndSettle();
+
+      // "Record payment" appears twice (sheet title + button label) —
+      // the customer's name is the unambiguous display-side anchor.
+      final customerName = find.text(customer.name);
+      final recordPayment = find.descendant(
+        of: find.byType(AppButton),
+        matching: find.text('Record payment'),
+      );
+      final keypadDigit = find.text('1');
+      expect(customerName, findsOneWidget);
+      expect(recordPayment, findsOneWidget);
+      expect(keypadDigit, findsOneWidget);
+
+      // The defining property of the wide split: the display and the
+      // action button both sit in the same (left) pane, strictly left
+      // of the keypad's pane — not below it.
+      final customerNameX = tester.getTopLeft(customerName).dx;
+      final recordPaymentX = tester.getTopLeft(recordPayment).dx;
+      final keypadX = tester.getTopLeft(keypadDigit).dx;
+      expect(customerNameX, lessThan(keypadX));
+      expect(recordPaymentX, lessThan(keypadX));
+
+      final screenHeight =
+          tester.view.physicalSize.height / tester.view.devicePixelRatio;
+      expect(tester.getRect(recordPayment).bottom, lessThanOrEqualTo(screenHeight));
+
+      await tester.tap(keypadDigit);
+      await tester.pumpAndSettle();
+      await tester.tap(recordPayment);
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      expect(find.text('open sheet'), findsOneWidget);
+      expect(find.byType(BottomSheet), findsNothing);
+    },
+  );
 }

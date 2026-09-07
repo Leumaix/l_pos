@@ -24,12 +24,21 @@ class HomeScreen extends ConsumerWidget {
   final VoidCallback onStock;
   final VoidCallback onReports;
 
+  /// Whether to show "Verify another staff member" in the account menu —
+  /// the shared-till, multiple-staff-per-device handoff option. Defaults
+  /// to true, preserving exactly today's mobile behavior unchanged; the
+  /// web/PWA build's router passes false, since that whole concept (and
+  /// the /verify-email route it links to) doesn't apply when every staff
+  /// member has their own browser session.
+  final bool showStaffHandoffOption;
+
   const HomeScreen({
     super.key,
     required this.onSell,
     required this.onCustomers,
     required this.onStock,
     required this.onReports,
+    this.showStaffHandoffOption = true,
   });
 
   @override
@@ -46,6 +55,7 @@ class HomeScreen extends ConsumerWidget {
           padding: const EdgeInsets.all(AppSpacing.lg),
           child: ResponsiveCenter(
             maxWidth: 560,
+            desktopMaxWidth: 880,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -56,7 +66,7 @@ class HomeScreen extends ConsumerWidget {
                       businessName,
                       style: AppTextStyles.secondary(AppTextStyles.labelMd),
                     ),
-                    _AccountButton(user: user),
+                    _AccountButton(user: user, showStaffHandoffOption: showStaffHandoffOption),
                   ],
                 ),
                 const SizedBox(height: AppSpacing.md),
@@ -179,8 +189,9 @@ class _ShiftBanner extends StatelessWidget {
 /// its own.
 class _AccountButton extends ConsumerWidget {
   final AppUser? user;
+  final bool showStaffHandoffOption;
 
-  const _AccountButton({required this.user});
+  const _AccountButton({required this.user, required this.showStaffHandoffOption});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -258,22 +269,23 @@ class _AccountButton extends ConsumerWidget {
                       },
                     ),
                   ],
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: const Icon(
-                      Icons.person_add_alt_outlined,
-                      color: AppColors.textPrimary,
+                  if (showStaffHandoffOption)
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(
+                        Icons.person_add_alt_outlined,
+                        color: AppColors.textPrimary,
+                      ),
+                      title: const Text('Verify another staff member'),
+                      subtitle: const Text(
+                        'Sets up a new PIN without ending your shift',
+                      ),
+                      onTap: () {
+                        Navigator.of(sheetContext).pop();
+                        ref.read(verificationControllerProvider.notifier).start();
+                        context.push('/verify-email');
+                      },
                     ),
-                    title: const Text('Verify another staff member'),
-                    subtitle: const Text(
-                      'Sets up a new PIN without ending your shift',
-                    ),
-                    onTap: () {
-                      Navigator.of(sheetContext).pop();
-                      ref.read(verificationControllerProvider.notifier).start();
-                      context.push('/verify-email');
-                    },
-                  ),
                   ListTile(
                     contentPadding: EdgeInsets.zero,
                     leading: const Icon(Icons.logout, color: AppColors.danger),

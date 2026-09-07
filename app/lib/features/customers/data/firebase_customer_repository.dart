@@ -1,7 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../../../core/business_config.dart';
-import '../../auth/data/firebase_auth_repository.dart';
+import '../../auth/data/auth_repository.dart';
 import '../domain/customer.dart';
 import '../domain/customer_transaction.dart';
 import 'customer_repository.dart';
@@ -20,7 +20,7 @@ import 'customer_repository.dart';
 /// retries the whole transaction automatically if it races a concurrent
 /// write, closing the gap a blind increment would leave open.
 class FirebaseCustomerRepository implements CustomerRepository {
-  final FirebaseAuthRepository _firebaseAuth;
+  final AuthRepository _firebaseAuth;
 
   FirebaseCustomerRepository(this._firebaseAuth);
 

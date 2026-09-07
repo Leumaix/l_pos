@@ -8,5 +8,5 @@ import '../data/checkout_repository.dart';
 /// FakeCheckoutRepository built from the same fakes they already use for
 /// inventory/customers/sales.
 final checkoutRepositoryProvider = Provider<CheckoutRepository>(
-  (ref) => FirebaseCheckoutRepository(ref.watch(firebaseAuthRepositoryProvider)),
+  (ref) => FirebaseCheckoutRepository(ref.watch(authRepositoryProvider)),
 );

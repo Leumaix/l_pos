@@ -4,7 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:gas_stock/gas_stock.dart';
 
 import '../../../core/business_config.dart';
-import '../../auth/data/firebase_auth_repository.dart';
+import '../../auth/data/auth_repository.dart';
 import '../domain/category.dart';
 import '../domain/product.dart';
 import 'inventory_repository.dart';
@@ -26,7 +26,7 @@ import 'inventory_repository.dart';
 /// needs to READ the current rate/units first to compute the new units,
 /// which a batch can't do.
 class FirebaseInventoryRepository implements InventoryRepository {
-  final FirebaseAuthRepository _firebaseAuth;
+  final AuthRepository _firebaseAuth;
 
   GasStock _cachedGasStock = GasStock.zero;
   StreamSubscription<GasStock>? _gasStockSubscription;

@@ -10,6 +10,7 @@ import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_text_styles.dart';
 import '../../../core/utils/currency.dart';
 import '../../../core/widgets/app_card.dart';
+import '../../../core/widgets/stat_card.dart';
 import '../../business/application/business_providers.dart';
 import '../../customers/application/customer_providers.dart';
 import '../../customers/domain/customer_totals.dart';
@@ -38,6 +39,7 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
     final capacityKg = ref.watch(gasTankCapacityKgProvider);
     final productsAsync = ref.watch(productsProvider);
     final shiftHistoryAsync = ref.watch(shiftHistoryProvider);
+    final isDesktop = Breakpoints.isDesktop(context);
 
     return Scaffold(
       appBar: AppBar(
@@ -51,6 +53,7 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
           padding: const EdgeInsets.all(AppSpacing.lg),
           child: ResponsiveCenter(
             maxWidth: 640,
+            desktopMaxWidth: 960,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -71,6 +74,14 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
                   ],
                 ),
                 const SizedBox(height: AppSpacing.lg),
+                // Desktop: a real multi-panel dashboard (stat tiles up top,
+                // grid panels below) instead of the narrow/tablet single
+                // column below — that column is otherwise untouched, so
+                // this is purely additive, not a reorganization of it.
+                if (isDesktop)
+                  _buildDesktopDashboard()
+                else
+                  ...[
                 salesAsync.when(
                   data: (sales) {
                     final report = buildSalesReport(sales, range: _range, now: DateTime.now());
@@ -230,11 +241,188 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
                   error: (err, _) =>
                       Text('Could not load shift history', style: AppTextStyles.danger(AppTextStyles.bodyMd)),
                 ),
+                  ],
               ],
             ),
           ),
         ),
       ),
+    );
+  }
+
+  /// Desktop only: a real multi-panel dashboard — small stat tiles across
+  /// the top, then the bigger panels (chart, breakdown, shift history) as
+  /// grid panels below rather than stacked one on top of the other, like
+  /// a real analytics dashboard rather than a wider version of the same
+  /// single column. Re-watches the same providers the narrow column above
+  /// already does (Riverpod returns the cached value; this is not a
+  /// second, divergent read of anything) rather than threading five
+  /// AsyncValue parameters through a separate widget class — same data,
+  /// arranged differently.
+  Widget _buildDesktopDashboard() {
+    final salesAsync = ref.watch(salesProvider);
+    final gasStockAsync = ref.watch(gasStockProvider);
+    final rate = ref.watch(gasRateProvider);
+    final productsAsync = ref.watch(productsProvider);
+    final customersAsync = ref.watch(customersProvider);
+    final shiftHistoryAsync = ref.watch(shiftHistoryProvider);
+
+    final salesLabel = switch (_range) {
+      ReportRange.today => "Today's sales",
+      ReportRange.week => "This week's sales",
+      ReportRange.month => "This month's sales",
+    };
+    // Computed once here, then reused by the stat tile, the chart, and
+    // the breakdown panel below — same single source of truth as the
+    // narrow column's own salesAsync.when() call, not three separate
+    // re-derivations of the same range's totals.
+    final sales = salesAsync.valueOrNull;
+    final report = sales == null
+        ? null
+        : buildSalesReport(sales, range: _range, now: DateTime.now());
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: StatCard(
+                  label: salesLabel,
+                  value: report == null ? '—' : formatNaira(report.totalForRange),
+                ),
+              ),
+              const SizedBox(width: AppSpacing.md),
+              Expanded(
+                child: gasStockAsync.when(
+                  data: (gasStock) => StatCard(
+                    label: 'Gas remaining',
+                    value: formatKg(kgRemaining(gasStock, rate)),
+                    icon: Icons.local_fire_department_outlined,
+                  ),
+                  loading: () => const StatCard(
+                    label: 'Gas remaining',
+                    value: '—',
+                    icon: Icons.local_fire_department_outlined,
+                  ),
+                  error: (err, _) => const StatCard(
+                    label: 'Gas remaining',
+                    value: '—',
+                    icon: Icons.local_fire_department_outlined,
+                  ),
+                ),
+              ),
+              const SizedBox(width: AppSpacing.md),
+              Expanded(
+                child: productsAsync.when(
+                  data: (products) {
+                    final lowStockCount =
+                        products.where((p) => p.stockCount <= kLowStockThreshold).length;
+                    return StatCard(
+                      label: 'Low-stock items',
+                      value: '$lowStockCount',
+                      valueColor: lowStockCount > 0 ? AppColors.danger : null,
+                    );
+                  },
+                  loading: () => const StatCard(label: 'Low-stock items', value: '—'),
+                  error: (err, _) => const StatCard(label: 'Low-stock items', value: '—'),
+                ),
+              ),
+              const SizedBox(width: AppSpacing.md),
+              Expanded(
+                child: customersAsync.when(
+                  data: (customers) => StatCard(
+                    label: 'Debtors outstanding',
+                    value: formatNaira(totalOwedByCustomers(customers)),
+                    valueColor: AppColors.danger,
+                  ),
+                  loading: () => const StatCard(label: 'Debtors outstanding', value: '—'),
+                  error: (err, _) => const StatCard(label: 'Debtors outstanding', value: '—'),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: AppSpacing.lg),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Last 7 days', style: AppTextStyles.headingSm),
+                  const SizedBox(height: AppSpacing.md),
+                  if (report != null)
+                    AppCard(child: _DailyChart(days: report.last7Days))
+                  else if (salesAsync.isLoading)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: AppSpacing.xl),
+                      child: Center(child: CircularProgressIndicator(color: AppColors.accent)),
+                    )
+                  else
+                    Text('Could not load sales', style: AppTextStyles.danger(AppTextStyles.bodyMd)),
+                  const SizedBox(height: AppSpacing.lg),
+                  Text('By product type', style: AppTextStyles.headingSm),
+                  const SizedBox(height: AppSpacing.md),
+                  if (report != null)
+                    AppCard(
+                      child: Column(
+                        children: [
+                          _BreakdownRow(label: 'Gas', value: report.breakdown.gas),
+                          _BreakdownRow(
+                            label: 'Products',
+                            value: report.breakdown.products,
+                            isLast: true,
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(width: AppSpacing.lg),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Shift history', style: AppTextStyles.headingSm),
+                  const SizedBox(height: AppSpacing.sm),
+                  Text(
+                    'Every closed business day — the cash float declared, per-method '
+                    'totals, and how the counted drawer compared to what was expected.',
+                    style: AppTextStyles.secondary(AppTextStyles.bodyMd),
+                  ),
+                  const SizedBox(height: AppSpacing.md),
+                  shiftHistoryAsync.when(
+                    data: (shifts) => shifts.isEmpty
+                        ? Text(
+                            'No shifts closed yet.',
+                            style: AppTextStyles.secondary(AppTextStyles.bodyMd),
+                          )
+                        : Column(
+                            children: [
+                              for (final shift in shifts) ...[
+                                _ShiftHistoryCard(shift: shift),
+                                const SizedBox(height: AppSpacing.sm),
+                              ],
+                            ],
+                          ),
+                    loading: () =>
+                        const Center(child: CircularProgressIndicator(color: AppColors.accent)),
+                    error: (err, _) => Text(
+                      'Could not load shift history',
+                      style: AppTextStyles.danger(AppTextStyles.bodyMd),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }

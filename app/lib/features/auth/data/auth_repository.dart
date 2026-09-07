@@ -1,3 +1,5 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+
 /// The signed-in staff member, as far as the rest of the app needs to know.
 /// [phone] is contact info only now — it plays no role in sign-in (see
 /// [AuthRepository] doc).
@@ -90,6 +92,17 @@ abstract class AuthRepository {
   Stream<AppUser?> authStateChanges();
 
   AppUser? get currentUser;
+
+  /// The Firestore instance authenticated as whoever is CURRENTLY ACTIVE,
+  /// null if nobody's signed in — every other real Firebase-backed
+  /// repository (invites, stock, customers, sales, shift, business,
+  /// checkout) reads this rather than touching FirebaseFirestore.instance
+  /// directly, so security rules that check request.auth evaluate against
+  /// the right identity regardless of which concrete AuthRepository is
+  /// wired up (FirebaseAuthRepository's per-staff secondary-app session
+  /// for mobile, or a plain default-app session for web — see
+  /// WebAuthRepository).
+  FirebaseFirestore? get activeFirestore;
 
   /// True if this device already has a local credential for [email] —
   /// lets the UI decide whether to show the PIN keypad or the "verify by

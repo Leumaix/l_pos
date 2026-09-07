@@ -1,12 +1,12 @@
 {
-    "name": "leumadepos",
-    "short_name": "leumadepos",
+    "name": "Leumadepos",
+    "short_name": "Leumadepos",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
-    "orientation": "portrait-primary",
+    "background_color": "#0B0D10",
+    "theme_color": "#0B0D10",
+    "description": "Leumadepos point-of-sale — sell, manage stock, and track customers from any browser.",
+    "orientation": "any",
     "prefer_related_applications": false,
     "icons": [
         {

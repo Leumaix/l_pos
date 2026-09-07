@@ -36,6 +36,7 @@ class ManageCategoryProductsScreen extends ConsumerWidget {
           padding: const EdgeInsets.all(AppSpacing.lg),
           child: ResponsiveCenter(
             maxWidth: 640,
+            desktopMaxWidth: 960,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [

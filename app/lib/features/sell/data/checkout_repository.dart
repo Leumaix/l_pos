@@ -1,7 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../../../core/business_config.dart';
-import '../../auth/data/firebase_auth_repository.dart';
+import '../../auth/data/auth_repository.dart';
 import '../../customers/data/customer_repository.dart';
 import '../../shift/data/shift_repository.dart';
 import '../domain/cart_line.dart';
@@ -120,7 +120,7 @@ class FakeCheckoutRepository implements CheckoutRepository {
 /// before any writes within one transaction, so the (single, optional)
 /// customer-balance read and the shift-state read both happen first.
 class FirebaseCheckoutRepository implements CheckoutRepository {
-  final FirebaseAuthRepository _firebaseAuth;
+  final AuthRepository _firebaseAuth;
 
   FirebaseCheckoutRepository(this._firebaseAuth);
 

@@ -8,7 +8,7 @@ import '../data/firebase_customer_repository.dart';
 /// everywhere. Widget tests override this explicitly with
 /// FakeCustomerRepository, same pattern as every other repository here.
 final customerRepositoryProvider = Provider<CustomerRepository>(
-  (ref) => FirebaseCustomerRepository(ref.watch(firebaseAuthRepositoryProvider)),
+  (ref) => FirebaseCustomerRepository(ref.watch(authRepositoryProvider)),
 );
 
 final customersProvider = StreamProvider(

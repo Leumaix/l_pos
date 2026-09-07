@@ -11,7 +11,7 @@ import '../data/inventory_repository.dart';
 /// FirebaseInventoryRepository's doc comment), overridden with
 /// FakeInventoryRepository in tests.
 final inventoryRepositoryProvider = Provider<InventoryRepository>(
-  (ref) => FirebaseInventoryRepository(ref.watch(firebaseAuthRepositoryProvider)),
+  (ref) => FirebaseInventoryRepository(ref.watch(authRepositoryProvider)),
 );
 
 final gasStockProvider = StreamProvider((ref) => ref.watch(inventoryRepositoryProvider).watchGasStock());

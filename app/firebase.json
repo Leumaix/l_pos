@@ -12,6 +12,10 @@
         "lib/firebase_options.dart": {
           "projectId": "lpos-ac40b",
           "configurations": { "ios": "1:962274041428:ios:fd6961d6bfdfa23f2cd7c1" }
+        },
+        "lib/firebase_options_web_dev.dart": {
+          "projectId": "leumadepos-web-dev",
+          "configurations": { "web": "1:1043041741150:web:cfb382d29fb0dc243b47cf" }
         }
       }
     }
@@ -27,6 +31,9 @@
   "emulators": {
     "firestore": {
       "port": 8090
+    },
+    "auth": {
+      "port": 9099
     },
     "ui": {
       "enabled": false
