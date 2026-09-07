@@ -10,7 +10,17 @@
 /// this path. If it's ever changed here, the Firestore document (and
 /// every staff doc under it) has to be renamed to match, or Leumadepos
 /// will simply see no business at all.
-const kBusinessId = 'ph-zazaa';
+///
+/// Overridable via `--dart-define=BUSINESS_ID=<id>` at build time — this
+/// is what let the Demo Account build target businesses/demo without a
+/// second entry-point file or touching every repository that reads this
+/// constant. String.fromEnvironment is resolved at COMPILE time (the
+/// Dart compiler bakes the literal value in, it's not a runtime lookup),
+/// so an ordinary build with no flag passed is byte-for-byte the same
+/// 'ph-zazaa' this always resolved to — every existing build command for
+/// the real app (mobile, main_web.dart, main_web_prod.dart) is completely
+/// unaffected unless it explicitly passes the flag.
+const kBusinessId = String.fromEnvironment('BUSINESS_ID', defaultValue: 'ph-zazaa');
 
 /// The Firebase project's default Hosting domain — deployed specifically
 /// to support email-link auth now that Dynamic Links is gone. Must match
