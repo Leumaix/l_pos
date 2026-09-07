@@ -86,16 +86,16 @@ class FirebaseInventoryRepository implements InventoryRepository {
       final snapshot = await transaction.get(_gasStockDoc);
       final data = snapshot.data();
       final oldRateValue = data?['rate'];
-      if (oldRateValue == null) {
-        // No rate has ever been set for this business — a freshly
-        // onboarded business (see the super-admin onboarding tool, which
-        // deliberately writes nothing gas-specific) has no gasStock/
-        // current doc at all yet. There's no old rate to preserve
-        // physical kg against, so this is an initialization, not a
-        // change: units starts at 0 (no prior physical stock to
-        // preserve, since none was ever seeded) and the ledger entry
-        // says so honestly rather than looking like a rateChange with a
-        // fabricated "before" state.
+      final existingUnits = (data?['units'] as num? ?? 0).toInt();
+
+      if (oldRateValue == null && existingUnits == 0) {
+        // Nothing to preserve either way: no gasStock/current doc at
+        // all yet (a freshly onboarded business — see the super-admin
+        // onboarding tool, which deliberately writes nothing
+        // gas-specific), or one that exists but has never recorded any
+        // stock. Genuine initialization, not a change: units starts at
+        // 0 and the ledger entry says so honestly rather than looking
+        // like a rateChange with a fabricated "before" state.
         transaction.set(_gasStockDoc, {
           'rate': newRate.nairaPerKg,
           'units': 0,
@@ -112,8 +112,28 @@ class FirebaseInventoryRepository implements InventoryRepository {
         });
         return;
       }
-      final oldRate = GasRate(oldRateValue as num);
-      final oldStock = GasStock((data?['units'] as num? ?? 0).toInt());
+
+      // Either a real rate already exists (an ordinary rate change), or
+      // units were already recorded with NO rate ever explicitly set —
+      // ordinary staff sales/restock activity can create gasStock/
+      // current with just {units} (see firestore.rules' gasStock create
+      // rule) before any owner ever visits Settings to configure one.
+      // That second case is not a blank slate: every one of those units
+      // was computed using kDefaultGasRateNairaPerKg, the fallback this
+      // repository's own gasRate getter/watchGasRate return whenever
+      // `rate` is missing (see above) — so the Sell/Restock screens
+      // were already pricing gas at that rate all along, implicitly.
+      // Treat this exactly like an ordinary change FROM that implicit
+      // rate, preserving physical kg — resetting units to 0 here would
+      // silently destroy real recorded stock. (Confirmed against a real
+      // permission-denied bug on a live business: firestore.rules has
+      // no path for "add rate to an existing units-only doc" that skips
+      // this preservation — see that rule's own comment for the
+      // matching server-side half of this fix.)
+      final oldRate = oldRateValue == null
+          ? const GasRate(kDefaultGasRateNairaPerKg)
+          : GasRate(oldRateValue as num);
+      final oldStock = GasStock(existingUnits);
       final result = changeRate(oldStock, oldRate, newRate);
 
       transaction.set(_gasStockDoc, {

@@ -259,6 +259,32 @@ service cloud.firestore {
           && float(resource.data.units) / float(resource.data.rate)
              >= float(request.resource.data.units) / float(request.resource.data.rate) - 0.01;
 
+        // 3. Owner sets a rate for the first time on a doc that already
+        //    EXISTS with units but no rate — distinct from create rule 2
+        //    above (which only ever applies before the doc exists at
+        //    all). Ordinary staff sales/restock activity (create rule 1)
+        //    can produce exactly this state — units recorded before any
+        //    owner ever visited Settings — and every one of those units
+        //    was computed client-side using kDefaultGasRateNairaPerKg
+        //    (lib/core/business_config.dart), the fallback rate the app
+        //    uses whenever this doc has no `rate` yet. This preserves
+        //    physical kg from THAT implicit rate, exactly like rule 2
+        //    does from an explicit one — see
+        //    FirebaseInventoryRepository.changeGasRate's matching
+        //    client-side branch. The 1400 literal below is
+        //    kDefaultGasRateNairaPerKg's value, copied by hand: rules
+        //    have no way to reference a Dart constant, so if that
+        //    constant ever changes, this must change with it.
+        allow update: if isActiveOwnerOf(businessId)
+          && !('rate' in resource.data)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['rate', 'units'])
+          && request.resource.data.rate is number
+          && request.resource.data.rate > 0
+          && float(resource.data.units) / 1400.0
+             <= float(request.resource.data.units) / float(request.resource.data.rate) + 0.01
+          && float(resource.data.units) / 1400.0
+             >= float(request.resource.data.units) / float(request.resource.data.rate) - 0.01;
+
         // No legitimate reason to ever delete the current stock doc.
         allow delete: if false;
       }
