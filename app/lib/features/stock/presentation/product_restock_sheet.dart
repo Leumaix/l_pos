@@ -84,6 +84,12 @@ class _ProductRestockSheetState extends ConsumerState<_ProductRestockSheet> {
     final quantity = _quantity;
     final currentStock = widget.product.stockCount;
     final newStock = currentStock + (quantity ?? 0);
+    // Named so the button's onPressed and KeypadEntryLayout's physical-
+    // keyboard Enter share the exact same enabled condition and
+    // callback, rather than two copies that could drift apart.
+    final VoidCallback? onAddToStock = (quantity != null && quantity > 0 && !_submitting)
+        ? _confirm
+        : null;
 
     return Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
@@ -122,12 +128,12 @@ class _ProductRestockSheetState extends ConsumerState<_ProductRestockSheet> {
               ],
             ),
             keypad: NumericKeypad(onKeyTap: _tapKey),
+            onKeyTap: _tapKey,
+            onSubmit: onAddToStock,
             action: AppButton(
               label: 'Add to stock',
               loading: _submitting,
-              onPressed: (quantity != null && quantity > 0 && !_submitting)
-                  ? _confirm
-                  : null,
+              onPressed: onAddToStock,
             ),
           ),
         ),

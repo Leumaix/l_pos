@@ -76,6 +76,12 @@ class _RepaymentSheetState extends ConsumerState<_RepaymentSheet> {
   Widget build(BuildContext context) {
     final amount = _amount;
     final newBalance = widget.customer.balance - (amount ?? 0);
+    // Named so the button's onPressed and KeypadEntryLayout's physical-
+    // keyboard Enter share the exact same enabled condition and
+    // callback, rather than two copies that could drift apart.
+    final VoidCallback? onRecordPayment = (amount != null && amount > 0 && !_submitting)
+        ? _confirm
+        : null;
 
     return Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
@@ -110,12 +116,12 @@ class _RepaymentSheetState extends ConsumerState<_RepaymentSheet> {
               ],
             ),
             keypad: NumericKeypad(onKeyTap: _tapKey),
+            onKeyTap: _tapKey,
+            onSubmit: onRecordPayment,
             action: AppButton(
               label: 'Record payment',
               loading: _submitting,
-              onPressed: (amount != null && amount > 0 && !_submitting)
-                  ? _confirm
-                  : null,
+              onPressed: onRecordPayment,
             ),
           ),
         ),

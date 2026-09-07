@@ -75,6 +75,8 @@ class LoginScreen extends ConsumerWidget {
               ],
             ),
             keypad: NumericKeypad(onKeyTap: controller.tapKey),
+            onKeyTap: controller.tapKey,
+            onSubmit: state.canSubmit ? handleSubmit : null,
             action: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
