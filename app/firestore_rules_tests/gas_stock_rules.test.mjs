@@ -221,6 +221,99 @@ describe('gas stock rate initialization (/businesses/{businessId}/gasStock/curre
   });
 });
 
+// Regression coverage for a real bug found on a live business: ordinary
+// staff sales/restock activity (see the units-only create rule above)
+// can create this doc with units but no rate BEFORE any owner ever
+// visits Settings — distinct from "no doc at all yet" (the initialize
+// block above), since that rule only ever applies pre-existence. Every
+// unit already recorded in that state was priced using the app's own
+// default rate (1400 — kDefaultGasRateNairaPerKg in
+// lib/core/business_config.dart, hardcoded here since rules can't
+// reference a Dart constant), so setting a real rate for the first time
+// on that existing doc must preserve physical kg from THAT implicit
+// rate, the same ±0.01kg tolerance as an ordinary rate change.
+describe('gas stock first rate set on an EXISTING units-only doc (owner-only, kg preserved from the implicit default rate)', () => {
+  it('ALLOWS an owner to set the first rate when units already exist, preserving kg at the implicit 1400 default', async () => {
+    await seedOwner(BIZ, 'owner-uid');
+    await seedGasStock(BIZ, 1116000); // no rate — 1400 was the implicit price all along
+
+    const db = asUser('owner-uid', 'owner@example.com');
+    // Saving the same 1400/kg the business was already implicitly
+    // priced at — no numeric change, just making it explicit.
+    await assertSucceeds(
+      setDoc(doc(db, `businesses/${BIZ}/gasStock/current`), { rate: 1400, units: 1116000 }, { merge: true }),
+    );
+
+    await seed(async (adminDb) => {
+      const snap = await getDoc(doc(adminDb, `businesses/${BIZ}/gasStock/current`));
+      assert.equal(snap.data().rate, 1400);
+      assert.equal(snap.data().units, 1116000); // NOT reset to 0
+    });
+  });
+
+  it('ALLOWS the units to be re-expressed for a genuinely different first-ever rate, kg preserved', async () => {
+    await seedOwner(BIZ, 'owner-uid');
+    await seedGasStock(BIZ, 1400); // 1kg at the implicit 1400/kg
+
+    const db = asUser('owner-uid', 'owner@example.com');
+    // Same 1kg, re-expressed at 1500/kg = 1500 units.
+    await assertSucceeds(
+      setDoc(doc(db, `businesses/${BIZ}/gasStock/current`), { rate: 1500, units: 1500 }, { merge: true }),
+    );
+  });
+
+  it('DENIES an owner from inflating units under cover of this transition', async () => {
+    await seedOwner(BIZ, 'owner-uid');
+    await seedGasStock(BIZ, 1116000); // 797.14...kg at the implicit 1400/kg
+
+    const db = asUser('owner-uid', 'owner@example.com');
+    await assertFails(
+      setDoc(doc(db, `businesses/${BIZ}/gasStock/current`), { rate: 1400, units: 2000000 }, { merge: true }),
+    );
+  });
+
+  it('DENIES a non-owner (active attendant) from setting the rate this way', async () => {
+    await seedAttendant(BIZ, 'attendant-uid');
+    await seedGasStock(BIZ, 1116000);
+
+    const db = asUser('attendant-uid', 'attendant@example.com');
+    await assertFails(
+      setDoc(doc(db, `businesses/${BIZ}/gasStock/current`), { rate: 1400, units: 1116000 }, { merge: true }),
+    );
+  });
+
+  it('DENIES a non-positive rate', async () => {
+    await seedOwner(BIZ, 'owner-uid');
+    await seedGasStock(BIZ, 1116000);
+
+    const db = asUser('owner-uid', 'owner@example.com');
+    await assertFails(
+      setDoc(doc(db, `businesses/${BIZ}/gasStock/current`), { rate: 0, units: 1116000 }, { merge: true }),
+    );
+  });
+
+  it('DENIES an unauthenticated request', async () => {
+    await seedGasStock(BIZ, 1116000);
+    const db = testEnv.unauthenticatedContext().firestore();
+    await assertFails(
+      setDoc(doc(db, `businesses/${BIZ}/gasStock/current`), { rate: 1400, units: 1116000 }, { merge: true }),
+    );
+  });
+
+  it('does not apply once a rate already exists — that goes through the ordinary rate-change rule instead', async () => {
+    await seedOwner(BIZ, 'owner-uid');
+    await seedGasStock(BIZ, 28000, 1400); // rate already set — not this rule's territory
+
+    const db = asUser('owner-uid', 'owner@example.com');
+    // Correct for an ordinary CHANGE from the real stored rate (1400),
+    // not the implicit-default math this new rule uses — proves the two
+    // rules don't overlap/conflict once a real rate is on record.
+    await assertSucceeds(
+      setDoc(doc(db, `businesses/${BIZ}/gasStock/current`), { rate: 1500, units: 30000 }, { merge: true }),
+    );
+  });
+});
+
 describe('gas stock rate change (/businesses/{businessId}/gasStock/current, owner-only)', () => {
   it('ALLOWS an active owner to change the rate when units is recomputed consistently (positive control)', async () => {
     await seedOwner(BIZ, 'owner-uid');

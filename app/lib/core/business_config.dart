@@ -28,13 +28,24 @@ const kAndroidPackageName = 'com.leumade.pos';
 /// value via the Settings screen.
 const kDefaultGasTankCapacityKg = 100.0;
 
-/// Fallback used only during the brief initial-load window before the
+/// Fallback used both during the brief initial-load window before the
 /// first `businesses/{kBusinessId}/gasStock/current.rate` snapshot
-/// arrives (or a read error) — matches the rate this whole app has been
-/// hardcoded to until now, so nothing silently changes for that window.
-/// Unlike capacity, there's no "unset" case in normal operation: rate
-/// must always exist in Firestore by the time any rate-change transaction
-/// runs, since the transaction needs a real current rate to preserve kg
-/// against — see FirebaseInventoryRepository.changeGasRate.
+/// arrives (or a read error), AND — more consequentially — as the real,
+/// implicit rate every kg-based gas sale/restock uses whenever this
+/// business's `gasStock/current` doc has no `rate` field yet (ordinary
+/// staff activity, not an owner, can create that doc with just `units`
+/// before any owner ever visits Settings — see firestore.rules' gasStock
+/// create rule). FirebaseInventoryRepository.changeGasRate's first-ever-
+/// rate-set logic treats those already-recorded units as having been
+/// priced at exactly this rate, preserving their physical kg rather than
+/// discarding them — confirmed as a real, previously-broken case on a
+/// live business, not a hypothetical.
+///
+/// firestore.rules' matching gasStock update rule (the one gating that
+/// exact transition) hardcodes this same value as a literal `1400.0` —
+/// rules have no way to reference a Dart constant. If this value ever
+/// changes, that literal must change with it, or the two will silently
+/// disagree about how much physical kg a business's already-recorded
+/// units represent.
 const kDefaultGasRateNairaPerKg = 1400;
 
