@@ -371,6 +371,20 @@ service cloud.firestore {
         // change is now permanently paired with a real, staff-
         // attributed, append-only record carrying the exact number
         // written, not silent.
+        //
+        // The !exists() check below closes a real hole the getAfter()
+        // check alone left open: getAfter() on a path this write
+        // doesn't touch just returns that document's ALREADY-EXISTING
+        // state — so without also requiring the referenced transaction
+        // to be brand new, a staff member could point lastTransactionId
+        // at any OLD transaction doc (staff can read the whole
+        // subcollection) whose balanceAfter happens to match whatever
+        // new balance they want to write, and the pairing check would
+        // pass without a single new transaction record ever being
+        // created for that change — the "permanently paired with a
+        // real record" guarantee above was not actually true until this
+        // was added. Requiring the doc to not have existed before this
+        // write forces it to be the one created by THIS exact write.
         allow update: if isActiveOwnerOf(businessId)
           || (
             isActiveStaffOf(businessId)
@@ -378,6 +392,7 @@ service cloud.firestore {
               !('balance' in request.resource.data.diff(resource.data).affectedKeys())
               || (
                 request.resource.data.diff(resource.data).affectedKeys().hasOnly(['balance', 'lastTransactionId'])
+                && !exists(/databases/$(database)/documents/businesses/$(businessId)/customers/$(customerId)/transactions/$(request.resource.data.lastTransactionId))
                 && request.resource.data.balance ==
                    getAfter(/databases/$(database)/documents/businesses/$(businessId)/customers/$(customerId)/transactions/$(request.resource.data.lastTransactionId)).data.balanceAfter
               )
