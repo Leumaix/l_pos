@@ -55,6 +55,7 @@ class HomeScreen extends ConsumerWidget {
           padding: const EdgeInsets.all(AppSpacing.lg),
           child: ResponsiveCenter(
             maxWidth: 560,
+            desktopMaxWidth: 880,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/responsive/breakpoints.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_text_styles.dart';
@@ -30,47 +31,55 @@ class OpenDayScreen extends ConsumerWidget {
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(AppSpacing.lg),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Starting cash float', style: AppTextStyles.headingSm),
-              const SizedBox(height: AppSpacing.sm),
-              Text(
-                'The cash you\'re starting the drawer with. This is scoped to the whole '
-                'business day, not just your shift — it stays open until someone closes it '
-                'tonight, no matter who\'s handling sales in between.',
-                style: AppTextStyles.secondary(AppTextStyles.bodyMd),
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              AppCard(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Starting float (₦)', style: AppTextStyles.labelMd),
-                    const SizedBox(height: AppSpacing.xs),
-                    TextField(
-                      enabled: !state.submitting,
-                      keyboardType: TextInputType.number,
-                      onChanged: controller.setFloatInput,
-                      decoration: const InputDecoration(hintText: '0'),
-                    ),
-                    const SizedBox(height: AppSpacing.md),
-                    SizedBox(
-                      height: 20,
-                      child: state.errorMessage != null
-                          ? Text(state.errorMessage!, style: AppTextStyles.danger(AppTextStyles.bodySm))
-                          : null,
-                    ),
-                    const SizedBox(height: AppSpacing.md),
-                    AppButton(
-                      label: 'Open the day',
-                      loading: state.submitting,
-                      onPressed: state.floatInput.trim().isEmpty ? null : controller.openDay,
-                    ),
-                  ],
+          // A data-entry form should stay a sane, readable width at every
+          // viewport size, not stretch edge-to-edge on a wide desktop
+          // window — same as Login/Invite Staff/Restock. No
+          // desktopMaxWidth: unlike Home/Stock/Reports/etc., there's no
+          // "give it more room on desktop" case for a single form.
+          child: ResponsiveCenter(
+            maxWidth: 560,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Starting cash float', style: AppTextStyles.headingSm),
+                const SizedBox(height: AppSpacing.sm),
+                Text(
+                  'The cash you\'re starting the drawer with. This is scoped to the whole '
+                  'business day, not just your shift — it stays open until someone closes it '
+                  'tonight, no matter who\'s handling sales in between.',
+                  style: AppTextStyles.secondary(AppTextStyles.bodyMd),
                 ),
-              ),
-            ],
+                const SizedBox(height: AppSpacing.lg),
+                AppCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Starting float (₦)', style: AppTextStyles.labelMd),
+                      const SizedBox(height: AppSpacing.xs),
+                      TextField(
+                        enabled: !state.submitting,
+                        keyboardType: TextInputType.number,
+                        onChanged: controller.setFloatInput,
+                        decoration: const InputDecoration(hintText: '0'),
+                      ),
+                      const SizedBox(height: AppSpacing.md),
+                      SizedBox(
+                        height: 20,
+                        child: state.errorMessage != null
+                            ? Text(state.errorMessage!, style: AppTextStyles.danger(AppTextStyles.bodySm))
+                            : null,
+                      ),
+                      const SizedBox(height: AppSpacing.md),
+                      AppButton(
+                        label: 'Open the day',
+                        loading: state.submitting,
+                        onPressed: state.floatInput.trim().isEmpty ? null : controller.openDay,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),

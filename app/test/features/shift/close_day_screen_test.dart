@@ -131,4 +131,25 @@ void main() {
     expect(find.text('Enter a valid counted amount in ₦.'), findsOneWidget);
     expect(shift.currentShift, isNotNull);
   });
+
+  testWidgets(
+    'at a 1440x900 desktop surface, the form still stays a sane width — not stretched edge-to-edge',
+    (tester) async {
+      await pumpSignedInScreen(tester, onClosed: () {});
+
+      // pumpSignedInScreen pins a phone-sized surface for its own reason
+      // (see that helper's comment) — override it here, after signing
+      // in, for this test's own desktop-width case.
+      tester.view.physicalSize = const Size(1440, 900);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await settle(tester);
+
+      final box = tester.widget<ConstrainedBox>(
+        find.byKey(const ValueKey('responsiveCenterConstraint')),
+      );
+      expect(box.constraints.maxWidth, 560);
+    },
+  );
 }

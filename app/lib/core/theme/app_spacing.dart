@@ -13,4 +13,5 @@ abstract final class AppSpacing {
 
   static const minTouchTarget = 48.0;
   static const tabBarHeight = 64.0;
+  static const railWidth = 88.0;
 }
