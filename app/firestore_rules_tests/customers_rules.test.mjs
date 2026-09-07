@@ -165,6 +165,38 @@ describe('customers (/businesses/{businessId}/customers/{customerId})', () => {
     },
   );
 
+  it(
+    'DENIES the replay attack: pointing lastTransactionId at an OLD, already-existing transaction '
+    + 'doc to justify a fresh balance change with no new ledger entry ever created — getAfter() alone '
+    + 'is not enough here, since it returns an untouched doc\'s already-existing state',
+    async () => {
+      await seedAttendant(BIZ, 'attendant-uid');
+      await seedCustomer(BIZ, 'cust-1', 5000);
+      // A real, honest transaction from the past — exactly what a legitimate
+      // recordCreditSale/recordRepayment would have created at the time.
+      await seed(async (db) => {
+        await setDoc(doc(db, `businesses/${BIZ}/customers/cust-1/transactions/old-real-tx`), {
+          type: 'creditSale',
+          amountNaira: 1,
+          balanceAfter: 5001,
+          createdAt: new Date().toISOString(),
+          saleId: 'old-sale',
+        });
+      });
+
+      const db = asUser('attendant-uid', 'attendant@example.com');
+      // A bare update — no transactions/ write at all in this request — that
+      // reuses the OLD doc's id and its already-true balanceAfter to "prove"
+      // an unrelated new balance change, with no new ledger entry created.
+      await assertFails(
+        updateDoc(doc(db, `businesses/${BIZ}/customers/cust-1`), {
+          balance: 5001,
+          lastTransactionId: 'old-real-tx',
+        }),
+      );
+    },
+  );
+
   it('DENIES an active attendant from creating a customer with a nonzero opening balance', async () => {
     await seedAttendant(BIZ, 'attendant-uid');
     const db = asUser('attendant-uid', 'attendant@example.com');
