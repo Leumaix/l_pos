@@ -27,12 +27,21 @@ class WebAuthState {
   final String password;
   final String? errorMessage;
 
+  /// Non-error feedback — currently only "password reset email sent to
+  /// X". A separate field from [errorMessage] rather than reusing it
+  /// with a flag: this is a success outcome, and the login screen renders
+  /// it in the accent color the same way _AwaitingVerification's "check
+  /// your inbox" hint already does, not the danger color errorMessage
+  /// gets.
+  final String? infoMessage;
+
   const WebAuthState({
     this.stage = WebAuthStage.form,
     this.isSignUpMode = false,
     this.email = '',
     this.password = '',
     this.errorMessage,
+    this.infoMessage,
   });
 
   WebAuthState copyWith({
@@ -41,7 +50,9 @@ class WebAuthState {
     String? email,
     String? password,
     String? errorMessage,
+    String? infoMessage,
     bool clearError = false,
+    bool clearInfo = false,
   }) {
     return WebAuthState(
       stage: stage ?? this.stage,
@@ -49,6 +60,7 @@ class WebAuthState {
       email: email ?? this.email,
       password: password ?? this.password,
       errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
+      infoMessage: clearInfo ? null : (infoMessage ?? this.infoMessage),
     );
   }
 }
@@ -121,16 +133,23 @@ class WebAuthController extends StateNotifier<WebAuthState> {
     }
   }
 
-  void setEmail(String email) =>
-      state = state.copyWith(email: email, clearError: true);
+  void setEmail(String email) => state = state.copyWith(
+    email: email,
+    clearError: true,
+    clearInfo: true,
+  );
 
-  void setPassword(String password) =>
-      state = state.copyWith(password: password, clearError: true);
+  void setPassword(String password) => state = state.copyWith(
+    password: password,
+    clearError: true,
+    clearInfo: true,
+  );
 
   void toggleSignUpMode() => state = state.copyWith(
     isSignUpMode: !state.isSignUpMode,
     password: '',
     clearError: true,
+    clearInfo: true,
   );
 
   Future<void> signIn() async {
@@ -163,6 +182,38 @@ class WebAuthController extends StateNotifier<WebAuthState> {
       state = state.copyWith(
         stage: WebAuthStage.form,
         errorMessage: 'Could not create the account — $e',
+      );
+    }
+  }
+
+  /// Recovers an account stuck with no usable credential — see
+  /// WebAuthRepository.sendPasswordResetEmail's own doc comment for why
+  /// this is the one path back in for both "old email-link account, no
+  /// password ever set" and "forgot the real password". Only needs the
+  /// email field filled in, unlike signIn/signUp; stays on the form
+  /// stage throughout (reusing `submitting` to disable the fields/buttons
+  /// mid-request, same as those two) rather than a dedicated stage, since
+  /// there's nothing further to navigate to — the result is either an
+  /// error or a message telling them to go check their inbox.
+  Future<void> sendPasswordReset() async {
+    final email = state.email.trim();
+    if (email.isEmpty) return;
+
+    state = state.copyWith(
+      stage: WebAuthStage.submitting,
+      clearError: true,
+      clearInfo: true,
+    );
+    try {
+      await _repository.sendPasswordResetEmail(email);
+      state = state.copyWith(
+        stage: WebAuthStage.form,
+        infoMessage: 'Password reset email sent to $email — click the link, set a password, then sign in here.',
+      );
+    } catch (e) {
+      state = state.copyWith(
+        stage: WebAuthStage.form,
+        errorMessage: 'Could not send the reset email — $e',
       );
     }
   }

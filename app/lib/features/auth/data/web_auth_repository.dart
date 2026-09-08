@@ -249,6 +249,23 @@ class WebAuthRepository implements AuthRepository {
     return appUser;
   }
 
+  /// Sends Firebase's own password-reset email. This is the ONLY recovery
+  /// path for an account that exists in Firebase Auth but has no password
+  /// credential set on it yet — e.g. one created under the old email-link
+  /// flow before this migration, or provisioned some other way. For that
+  /// account, signUp() fails outright (email-already-in-use — the Auth
+  /// account already exists) and signIn() fails too (there's no password
+  /// to check against), leaving it permanently stuck with no way back into
+  /// the app. Confirmed directly against a real account in this exact
+  /// state: Firebase's sendPasswordResetEmail handles a "no password yet"
+  /// account correctly on its own — the emailed link lets the user SET a
+  /// password for the first time, not just reset an existing one, so this
+  /// one method recovers both cases without needing to tell them apart.
+  Future<void> sendPasswordResetEmail(String email) async {
+    final normalizedEmail = email.trim().toLowerCase();
+    await _auth.sendPasswordResetEmail(email: normalizedEmail);
+  }
+
   /// Every login after sign-up: plain email + password, no email sent.
   Future<AppUser> signIn({
     required String email,

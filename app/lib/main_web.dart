@@ -13,6 +13,7 @@
 // project during dev), this points directly at leumadepos-web-dev for
 // real — that project itself already IS the sandbox.
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -26,6 +27,20 @@ import 'web_app.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+
+  // Same reasoning and same ports as main_admin.dart's own kDebugMode
+  // branch: auth bugs are much faster and safer to iterate on against a
+  // local, disposable emulator than against leumadepos-web-dev — seed
+  // whatever broken account state you need to reproduce, break it as
+  // many times as you like, nothing real is at risk. A debug run
+  // (flutter run, no --release) never touches the real sandbox project;
+  // a release build of this same entry point is unaffected and still
+  // points straight at it, exactly as before.
+  if (kDebugMode) {
+    FirebaseFirestore.instance.useFirestoreEmulator('localhost', 8090);
+    await FirebaseAuth.instance.useAuthEmulator('localhost', 9099);
+  }
+
   await _enableWebPersistence();
 
   runApp(
