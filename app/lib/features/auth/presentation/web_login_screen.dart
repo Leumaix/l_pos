@@ -126,13 +126,29 @@ class _CredentialsFormState extends State<_CredentialsForm> {
           onChanged: widget.controller.setPassword,
           decoration: const InputDecoration(hintText: 'Password'),
         ),
-        const SizedBox(height: AppSpacing.md),
+        const SizedBox(height: AppSpacing.sm),
+        Align(
+          alignment: Alignment.centerRight,
+          child: TextButton(
+            onPressed: submitting ? null : widget.controller.sendPasswordReset,
+            child: Text(
+              'Forgot password?',
+              style: AppTextStyles.secondary(AppTextStyles.bodySm),
+            ),
+          ),
+        ),
         ConstrainedBox(
           constraints: const BoxConstraints(minHeight: 20),
           child: widget.state.errorMessage != null
               ? Text(
                   widget.state.errorMessage!,
                   style: AppTextStyles.danger(AppTextStyles.bodySm),
+                  textAlign: TextAlign.center,
+                )
+              : widget.state.infoMessage != null
+              ? Text(
+                  widget.state.infoMessage!,
+                  style: AppTextStyles.accent(AppTextStyles.bodySm),
                   textAlign: TextAlign.center,
                 )
               : null,

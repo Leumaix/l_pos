@@ -287,6 +287,54 @@ void main() {
     });
   });
 
+  group('sendPasswordReset', () {
+    test('does nothing when email is blank — unlike signIn/signUp, no password is needed here', () async {
+      await controller.sendPasswordReset();
+      expect(controller.state.stage, WebAuthStage.form);
+      verifyNever(
+        () => auth.sendPasswordResetEmail(email: any(named: 'email')),
+      );
+    });
+
+    test('sends the reset email and shows an honest info message — the recovery path for an '
+        'account with no password credential set yet', () async {
+      when(() => auth.sendPasswordResetEmail(email: email))
+          .thenAnswer((_) async {});
+
+      controller.setEmail(email);
+      await controller.sendPasswordReset();
+
+      expect(controller.state.stage, WebAuthStage.form);
+      expect(controller.state.errorMessage, isNull);
+      expect(controller.state.infoMessage, contains(email));
+      verify(() => auth.sendPasswordResetEmail(email: email)).called(1);
+    });
+
+    test('falls back to the form stage with an honest error on failure', () async {
+      when(() => auth.sendPasswordResetEmail(email: email))
+          .thenThrow(fb_auth.FirebaseAuthException(code: 'user-not-found'));
+
+      controller.setEmail(email);
+      await controller.sendPasswordReset();
+
+      expect(controller.state.stage, WebAuthStage.form);
+      expect(controller.state.errorMessage, contains('user-not-found'));
+      expect(controller.state.infoMessage, isNull);
+    });
+
+    test('setting the email again clears a previous info message, same as it already clears errorMessage', () async {
+      when(() => auth.sendPasswordResetEmail(email: email))
+          .thenAnswer((_) async {});
+      controller.setEmail(email);
+      await controller.sendPasswordReset();
+      expect(controller.state.infoMessage, isNotNull);
+
+      controller.setEmail('someone-else@example.com');
+
+      expect(controller.state.infoMessage, isNull);
+    });
+  });
+
   group('checkVerificationAndContinue', () {
     Future<void> signUpFirst() async {
       final fbUser = _MockUser();

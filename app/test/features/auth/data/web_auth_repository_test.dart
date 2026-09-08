@@ -99,6 +99,28 @@ void main() {
     });
   });
 
+  group('sendPasswordResetEmail', () {
+    test('normalizes the email and forwards to Firebase — the one recovery path for an account '
+        'stuck with no password credential (old email-link account, or any other cause)', () async {
+      when(() => auth.sendPasswordResetEmail(email: email))
+          .thenAnswer((_) async {});
+
+      await repository.sendPasswordResetEmail('  Owner@Example.com  ');
+
+      verify(() => auth.sendPasswordResetEmail(email: email)).called(1);
+    });
+
+    test('lets FirebaseAuthException propagate as-is', () async {
+      when(() => auth.sendPasswordResetEmail(email: email))
+          .thenThrow(fb_auth.FirebaseAuthException(code: 'user-not-found'));
+
+      await expectLater(
+        () => repository.sendPasswordResetEmail(email),
+        throwsA(isA<fb_auth.FirebaseAuthException>()),
+      );
+    });
+  });
+
   group('resendVerificationEmail', () {
     test('re-sends to whoever Firebase currently has signed in', () async {
       final fbUser = _MockUser();
