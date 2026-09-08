@@ -215,19 +215,55 @@ describe('shiftState/current — read and sale-time totals update', () => {
     await assertSucceeds(getDoc(doc(db, `businesses/${BIZ}/shiftState/current`)));
   });
 
-  it('ALLOWS an active staff member to increment ONLY the totals fields — the checkout-time write', async () => {
-    await seedAttendant(BIZ, 'attendant-uid');
-    await seedOpenShift(BIZ);
+  it(
+    'ALLOWS an active staff member to increment the totals fields when paired, in the same transaction, '
+    + 'with the exact new sale those totals actually came from — the real checkout-time write. See '
+    + 'checkout_commit_rules.test.mjs for the full split-tender/lastSaleId-pairing coverage; this is the '
+    + 'minimal version scoped to shiftState/current\'s own rule.',
+    async () => {
+      await seedAttendant(BIZ, 'attendant-uid');
+      await seedOpenShift(BIZ);
 
-    const db = asUser('attendant-uid', 'attendant@example.com');
-    await assertSucceeds(
-      setDoc(
-        doc(db, `businesses/${BIZ}/shiftState/current`),
-        { cashTotalNaira: 26000, salesCount: 5 },
-        { merge: true },
-      ),
-    );
-  });
+      const db = asUser('attendant-uid', 'attendant@example.com');
+      await assertSucceeds(
+        runTransaction(db, async (transaction) => {
+          transaction.set(doc(db, `businesses/${BIZ}/sales/sale-1`), {
+            receiptNumber: 'sale-1',
+            items: [],
+            subtotal: 1000,
+            total: 1000,
+            payments: [{ method: 'cash', amountNaira: 1000 }],
+            staffId: 'attendant-uid',
+            staffName: 'Attendant',
+            createdAt: new Date().toISOString(),
+          });
+          transaction.update(doc(db, `businesses/${BIZ}/shiftState/current`), {
+            cashTotalNaira: 26000, // 25000 (seeded) + 1000
+            salesCount: 5,
+            lastSaleId: 'sale-1',
+          });
+        }),
+      );
+    },
+  );
+
+  it(
+    'DENIES a bare totals update with no lastSaleId at all — the old, unpaired shape this phase '
+    + 'closes off entirely, not just narrows',
+    async () => {
+      await seedAttendant(BIZ, 'attendant-uid');
+      await seedOpenShift(BIZ);
+
+      const db = asUser('attendant-uid', 'attendant@example.com');
+      await assertFails(
+        setDoc(
+          doc(db, `businesses/${BIZ}/shiftState/current`),
+          { cashTotalNaira: 26000, salesCount: 5 },
+          { merge: true },
+        ),
+      );
+    },
+  );
 
   it('DENIES touching openingFloatNaira in a sale-time-shaped update', async () => {
     await seedAttendant(BIZ, 'attendant-uid');

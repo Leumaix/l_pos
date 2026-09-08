@@ -205,6 +205,13 @@ class FirebaseCheckoutRepository implements CheckoutRepository {
       }
       transaction.update(_shiftStateDoc, {
         'salesCount': FieldValue.increment(1),
+        // Lets firestore.rules verify this update is paired with THIS
+        // exact sale — same pairing pattern lastTransactionId already
+        // uses on customers/{customerId} — so the totals increment can
+        // be cross-checked against what sale.payments actually says,
+        // not just trusted. See that rule's own comment for the fraud
+        // vector this closes.
+        'lastSaleId': sale.id,
         for (final entry in totalsByMethod.entries) _shiftTotalFieldByMethod[entry.key]!: FieldValue.increment(entry.value),
       });
 
