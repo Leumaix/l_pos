@@ -26,9 +26,10 @@ void main() {
     ],
     subtotal: 7000,
     total: 7000,
-    method: PaymentMethod.cash,
-    cashGiven: 10000,
-    changeGiven: 3000,
+    payments: const [
+      PaymentLine(method: PaymentMethod.cash, amountNaira: 10000),
+      PaymentLine(method: PaymentMethod.cash, amountNaira: -3000),
+    ],
     staffId: 'staff-1',
     staffName: 'Amaka',
     createdAt: DateTime(2026, 9, 6, 10),

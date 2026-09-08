@@ -41,13 +41,12 @@ Sale _saleAt(
 
   return buildSale(
     cart: cart,
-    method: PaymentMethod.cash,
+    payments: [PaymentLine(method: PaymentMethod.cash, amountNaira: cart.total)],
     staffId: 's1',
     staffName: 'Staff',
     id: 'sale-${when.millisecondsSinceEpoch}',
     receiptNumber: 'R',
     createdAt: when,
-    cashGiven: cart.total,
   );
 }
 

@@ -33,16 +33,25 @@ String formatReceiptText(Sale sale, {required String businessName}) {
   buffer
     ..writeln('------------------------------')
     ..writeln('Subtotal: ${_naira(sale.subtotal)}')
-    ..writeln('Total: ${_naira(sale.total)}')
-    ..writeln('Payment: ${_paymentMethodLabel(sale.method)}');
+    ..writeln('Total: ${_naira(sale.total)}');
 
-  if (sale.method == PaymentMethod.cash) {
-    buffer
-      ..writeln('Cash received: ${_naira(sale.cashGiven ?? 0)}')
-      ..writeln('Change: ${_naira(sale.changeGiven ?? 0)}');
+  // One line per non-cash payment line — itemized by method, the only
+  // shape that stays correct for both a single-method sale and a real
+  // split — then cash received/change (already summed across however
+  // many cash lines exist) whenever either is nonzero. Mirrors
+  // receipt_screen.dart's _paymentRows exactly.
+  for (final line in sale.payments) {
+    if (line.method == PaymentMethod.cash) continue;
+    buffer.writeln('${_paymentMethodLabel(line.method)}: ${_naira(line.amountNaira)}');
+    if (line.method == PaymentMethod.customerAccount) {
+      buffer.writeln('Charged to: ${line.customerName ?? ''}');
+    }
   }
-  if (sale.method == PaymentMethod.customerAccount) {
-    buffer.writeln('Charged to: ${sale.customerName ?? ''}');
+  if (sale.cashReceivedNaira > 0) {
+    buffer.writeln('Cash received: ${_naira(sale.cashReceivedNaira)}');
+  }
+  if (sale.changeGivenNaira > 0) {
+    buffer.writeln('Change: ${_naira(sale.changeGivenNaira)}');
   }
 
   buffer.writeln('Served by ${sale.staffName}');

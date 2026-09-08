@@ -37,14 +37,17 @@ class CheckoutController {
     final now = DateTime.now();
     final sale = buildSale(
       cart: cart,
-      method: method,
+      payments: _paymentsFor(
+        method: method,
+        cartTotal: cart.total,
+        cashGiven: cashGiven,
+        customer: customer,
+      ),
       staffId: staff.uid,
       staffName: staff.name,
       id: checkout.newSaleId(),
       receiptNumber: _receiptNumberFor(now),
       createdAt: now,
-      cashGiven: cashGiven,
-      customer: customer,
     );
 
     final gasUnits = cart.lines
@@ -57,6 +60,46 @@ class CheckoutController {
     ref.read(lastSaleProvider.notifier).state = sale;
 
     return sale;
+  }
+
+  /// Translates the single-method inputs the current Payment screen still
+  /// collects into the [PaymentLine] list buildSale actually needs — the
+  /// UI for entering a real split or a cross-method change is a separate,
+  /// later follow-up (see the split-tender design doc's own §5), so this
+  /// is the one place that bridges "what the screen collects today" and
+  /// "what the domain layer now models." A cash overpayment becomes two
+  /// lines (the amount tendered, then a negative change line) exactly the
+  /// way FirebaseSalesRepository reads an old single-method sale doc back
+  /// into this same shape — same mapping, same reasoning, so a sale built
+  /// today and a pre-migration sale read back later produce identical
+  /// [Sale.payments] shapes for the same real-world transaction.
+  List<PaymentLine> _paymentsFor({
+    required PaymentMethod method,
+    required int cartTotal,
+    int? cashGiven,
+    Customer? customer,
+  }) {
+    switch (method) {
+      case PaymentMethod.cash:
+        final given = cashGiven ?? 0;
+        final change = given - cartTotal;
+        return [
+          PaymentLine(method: PaymentMethod.cash, amountNaira: given),
+          if (change > 0) PaymentLine(method: PaymentMethod.cash, amountNaira: -change),
+        ];
+      case PaymentMethod.card:
+      case PaymentMethod.transfer:
+        return [PaymentLine(method: method, amountNaira: cartTotal)];
+      case PaymentMethod.customerAccount:
+        return [
+          PaymentLine(
+            method: PaymentMethod.customerAccount,
+            amountNaira: cartTotal,
+            customerId: customer?.id,
+            customerName: customer?.name,
+          ),
+        ];
+    }
   }
 
   String _receiptNumberFor(DateTime time) {

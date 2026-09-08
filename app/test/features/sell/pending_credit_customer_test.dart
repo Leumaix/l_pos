@@ -105,8 +105,9 @@ void main() {
       // set on the customer's ledger entry is covered separately in
       // checkout_controller's integration with CustomerRepository).
       expect(completedSale, isNotNull);
-      expect(completedSale!.method, PaymentMethod.customerAccount);
-      expect(completedSale!.customerName, 'Ngozi Eze');
+      final creditLine = completedSale!.customerAccountLine;
+      expect(creditLine, isNotNull);
+      expect(creditLine!.customerName, 'Ngozi Eze');
       expect(completedSale!.total, 15000);
     },
   );

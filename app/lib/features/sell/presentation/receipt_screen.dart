@@ -170,13 +170,7 @@ class _ReceiptCard extends StatelessWidget {
           const SizedBox(height: AppSpacing.md),
           const _DashedDivider(),
           const SizedBox(height: AppSpacing.md),
-          _InfoRow(label: 'Payment', value: _paymentMethodLabel(sale.method)),
-          if (sale.method == PaymentMethod.cash) ...[
-            _AmountRow(label: 'Cash received', value: sale.cashGiven ?? 0),
-            _AmountRow(label: 'Change', value: sale.changeGiven ?? 0, emphasize: true, success: true),
-          ],
-          if (sale.method == PaymentMethod.customerAccount)
-            _InfoRow(label: 'Charged to', value: sale.customerName ?? ''),
+          ..._paymentRows(sale),
           const SizedBox(height: AppSpacing.sm),
           _InfoRow(label: 'Served by', value: sale.staffName),
         ],
@@ -191,6 +185,31 @@ String _paymentMethodLabel(PaymentMethod method) => switch (method) {
   PaymentMethod.transfer => 'Transfer',
   PaymentMethod.customerAccount => 'Customer Account',
 };
+
+/// One row per non-cash payment line (itemized by method, not summarized
+/// under a single "Payment: X" label — the only shape that stays correct
+/// for both today's single-method sales and a real split), then cash
+/// received and change as their own rows whenever either is nonzero.
+/// [Sale.cashReceivedNaira]/[Sale.changeGivenNaira] already sum across
+/// however many cash lines a sale has, so this never needs to itemize
+/// cash lines individually.
+List<Widget> _paymentRows(Sale sale) {
+  final rows = <Widget>[];
+  for (final line in sale.payments) {
+    if (line.method == PaymentMethod.cash) continue;
+    rows.add(_AmountRow(label: _paymentMethodLabel(line.method), value: line.amountNaira));
+    if (line.method == PaymentMethod.customerAccount) {
+      rows.add(_InfoRow(label: 'Charged to', value: line.customerName ?? ''));
+    }
+  }
+  if (sale.cashReceivedNaira > 0) {
+    rows.add(_AmountRow(label: 'Cash received', value: sale.cashReceivedNaira));
+  }
+  if (sale.changeGivenNaira > 0) {
+    rows.add(_AmountRow(label: 'Change', value: sale.changeGivenNaira, emphasize: true, success: true));
+  }
+  return rows;
+}
 
 class _ReceiptLineRow extends StatelessWidget {
   final CartLine line;
