@@ -150,7 +150,8 @@ describe('sales (/businesses/{businessId}/sales/{saleId})', () => {
     const db = asUser('attendant-uid', 'attendant@example.com');
     await assertSucceeds(
       setDoc(doc(db, `businesses/${BIZ}/sales/sale-2`), {
-        totalNaira: 12000,
+        total: 12000,
+        payments: [{ method: 'cash', amountNaira: 12000 }],
         createdAt: new Date().toISOString(),
       }),
     );
@@ -163,7 +164,8 @@ describe('sales (/businesses/{businessId}/sales/{saleId})', () => {
     const db = asUser('owner-uid', 'owner@example.com');
     await assertSucceeds(
       setDoc(doc(db, `businesses/${BIZ}/sales/sale-3`), {
-        totalNaira: 8000,
+        total: 8000,
+        payments: [{ method: 'cash', amountNaira: 8000 }],
         createdAt: new Date().toISOString(),
       }),
     );

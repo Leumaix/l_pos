@@ -76,6 +76,23 @@ async function seedCustomer(businessId, customerId, balance = 0) {
   });
 }
 
+async function seedOpenShift(businessId) {
+  await seed(async (db) => {
+    await setDoc(doc(db, `businesses/${businessId}/shiftState/current`), {
+      openingFloatNaira: 10000,
+      openedByStaffId: 'someone',
+      openedByStaffName: 'Someone',
+      openedAt: new Date(),
+      cashTotalNaira: 0,
+      cardTotalNaira: 0,
+      transferTotalNaira: 0,
+      creditTotalNaira: 0,
+      salesCount: 0,
+      plannedHistoryId: 'hist-1',
+    });
+  });
+}
+
 function asUser(uid, email) {
   return testEnv.authenticatedContext(uid, { email, email_verified: true }).firestore();
 }
@@ -121,6 +138,10 @@ describe('customers (/businesses/{businessId}/customers/{customerId})', () => {
       await seedCustomer(BIZ, 'cust-1', 5000);
 
       const db = asUser('attendant-uid', 'attendant@example.com');
+      // type: 'repayment' — this is testing the customer-doc pairing
+      // mechanism itself, not the creditSale-specific sale cross-check
+      // (see split_tender_rules.test.mjs for that); repayment has no
+      // sale to check against, same as before this phase.
       await assertFails(
         runTransaction(db, async (transaction) => {
           transaction.update(doc(db, `businesses/${BIZ}/customers/cust-1`), {
@@ -128,7 +149,7 @@ describe('customers (/businesses/{businessId}/customers/{customerId})', () => {
             lastTransactionId: 'fake-tx',
           });
           transaction.set(doc(db, `businesses/${BIZ}/customers/cust-1/transactions/fake-tx`), {
-            type: 'creditSale',
+            type: 'repayment',
             amountNaira: 1,
             balanceAfter: 5001, // does not match the balance being written above
             createdAt: new Date().toISOString(),
@@ -141,7 +162,8 @@ describe('customers (/businesses/{businessId}/customers/{customerId})', () => {
 
   it(
     'ALLOWS an active attendant to move balance when paired with a matching ledger entry in the same '
-    + 'transaction — the real recordCreditSale/recordRepayment shape',
+    + 'transaction — the real recordRepayment shape (see split_tender_rules.test.mjs for the '
+    + 'creditSale-specific, sale-backed variant)',
     async () => {
       await seedAttendant(BIZ, 'attendant-uid');
       await seedCustomer(BIZ, 'cust-1', 5000);
@@ -154,11 +176,11 @@ describe('customers (/businesses/{businessId}/customers/{customerId})', () => {
             lastTransactionId: 'tx-real',
           });
           transaction.set(doc(db, `businesses/${BIZ}/customers/cust-1/transactions/tx-real`), {
-            type: 'creditSale',
+            type: 'repayment',
             amountNaira: 4000,
             balanceAfter: 9000,
             createdAt: new Date().toISOString(),
-            saleId: 'sale-1',
+            saleId: null,
           });
         }),
       );
@@ -268,13 +290,16 @@ describe('customer transactions (/businesses/{businessId}/customers/{customerId}
     await seedCustomer(BIZ, 'cust-1');
 
     const db = asUser('attendant-uid', 'attendant@example.com');
+    // type: 'repayment' — a bare create with no sale involved; see
+    // split_tender_rules.test.mjs for creditSale's own, sale-backed
+    // create rule coverage.
     await assertSucceeds(
       setDoc(doc(db, `businesses/${BIZ}/customers/cust-1/transactions/tx-1`), {
-        type: 'creditSale',
+        type: 'repayment',
         amountNaira: 4000,
         balanceAfter: 4000,
         createdAt: new Date().toISOString(),
-        saleId: 'sale-1',
+        saleId: null,
       }),
     );
   });
@@ -298,14 +323,29 @@ describe('customer transactions (/businesses/{businessId}/customers/{customerId}
   });
 
   it(
-    'ALLOWS the real multi-op write a credit sale performs — customer balance update + '
-    + 'transaction-ledger create, together, as one batch',
+    'ALLOWS the real multi-op write a credit sale performs — sale record + customer balance update + '
+    + 'transaction-ledger create, together, as one batch — now including the sale itself, since the '
+    + 'transaction-ledger create is cross-checked against it (see split_tender_rules.test.mjs for the '
+    + 'dedicated coverage of that check)',
     async () => {
       await seedAttendant(BIZ, 'attendant-uid');
       await seedCustomer(BIZ, 'cust-1', 2000);
+      await seedOpenShift(BIZ); // the sale write below now requires an open shift, same as sales_rules.test.mjs
 
       const db = asUser('attendant-uid', 'attendant@example.com');
       const batch = writeBatch(db);
+      batch.set(doc(db, `businesses/${BIZ}/sales/sale-2`), {
+        receiptNumber: 'sale-2',
+        items: [],
+        subtotal: 4000,
+        total: 4000,
+        payments: [
+          { method: 'customerAccount', amountNaira: 4000, customerId: 'cust-1', customerName: 'Ngozi Eze' },
+        ],
+        staffId: 'attendant-uid',
+        staffName: 'Attendant',
+        createdAt: new Date().toISOString(),
+      });
       batch.update(doc(db, `businesses/${BIZ}/customers/cust-1`), {
         balance: 6000,
         lastTransactionId: 'tx-2',

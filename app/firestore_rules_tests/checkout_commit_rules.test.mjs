@@ -1,11 +1,11 @@
 // Security-rules tests for the atomic checkout commit — the real
 // Firestore transaction FirebaseCheckoutRepository.commitSale performs
 // (sale record + gas stock/ledger + product stockCount decrements +
-// customer balance/transaction), exercised as ONE real transaction, not
-// isolated single-document writes. This is the same lesson this
-// session's invite-delete bug taught: a rule can allow every operation
-// individually and still deny (or wrongly allow) the combined write —
-// only testing the real shape catches that.
+// customer balance/transaction + shift totals), exercised as ONE real
+// transaction, not isolated single-document writes. This is the same
+// lesson this session's invite-delete bug taught: a rule can allow every
+// operation individually and still deny (or wrongly allow) the combined
+// write — only testing the real shape catches that.
 //
 // Run against the Firestore emulator (never the live project) — see
 // invites_and_staff_rules.test.mjs for the emulator setup/run
@@ -115,6 +115,21 @@ function asUser(uid, email) {
   return testEnv.authenticatedContext(uid, { email, email_verified: true }).firestore();
 }
 
+// A bare sale doc — receiptNumber/items/staff fields any real checkout
+// write would include, minus `total`/`payments`, which every call site
+// below fills in for its own scenario.
+function baseSale(overrides) {
+  return {
+    receiptNumber: overrides.receiptNumber ?? 'sale',
+    items: [],
+    subtotal: overrides.total,
+    staffId: 'attendant-uid',
+    staffName: 'Attendant',
+    createdAt: new Date().toISOString(),
+    ...overrides,
+  };
+}
+
 describe('checkout commit — the real transaction FirebaseCheckoutRepository.commitSale performs', () => {
   it('ALLOWS a cash sale (sale record + product stockCount decrement + shift totals increment) as one transaction', async () => {
     await seedAttendant(BIZ, 'attendant-uid');
@@ -124,20 +139,14 @@ describe('checkout commit — the real transaction FirebaseCheckoutRepository.co
     const db = asUser('attendant-uid', 'attendant@example.com');
     await assertSucceeds(
       runTransaction(db, async (transaction) => {
-        transaction.set(doc(db, `businesses/${BIZ}/sales/sale-1`), {
-          receiptNumber: 'sale-1',
-          items: [],
-          subtotal: 15000,
-          total: 15000,
-          method: 'cash',
-          cashGiven: 15000,
-          changeGiven: 0,
-          customerId: null,
-          customerName: null,
-          staffId: 'attendant-uid',
-          staffName: 'Attendant',
-          createdAt: new Date().toISOString(),
-        });
+        transaction.set(
+          doc(db, `businesses/${BIZ}/sales/sale-1`),
+          baseSale({
+            receiptNumber: 'sale-1',
+            total: 15000,
+            payments: [{ method: 'cash', amountNaira: 15000 }],
+          }),
+        );
         transaction.update(doc(db, `businesses/${BIZ}/products/prod-1`), { stockCount: 8 });
         // The shift-time totals write FirebaseCheckoutRepository.commitSale
         // now performs alongside every other mutation in this one
@@ -147,6 +156,7 @@ describe('checkout commit — the real transaction FirebaseCheckoutRepository.co
         transaction.update(doc(db, `businesses/${BIZ}/shiftState/current`), {
           cashTotalNaira: 15000,
           salesCount: 1,
+          lastSaleId: 'sale-1',
         });
       }),
     );
@@ -170,20 +180,16 @@ describe('checkout commit — the real transaction FirebaseCheckoutRepository.co
     const db = asUser('attendant-uid', 'attendant@example.com');
     await assertSucceeds(
       runTransaction(db, async (transaction) => {
-        transaction.set(doc(db, `businesses/${BIZ}/sales/sale-2`), {
-          receiptNumber: 'sale-2',
-          items: [],
-          subtotal: 22000,
-          total: 22000,
-          method: 'customerAccount',
-          cashGiven: null,
-          changeGiven: null,
-          customerId: 'cust-1',
-          customerName: 'Ngozi Eze',
-          staffId: 'attendant-uid',
-          staffName: 'Attendant',
-          createdAt: new Date().toISOString(),
-        });
+        transaction.set(
+          doc(db, `businesses/${BIZ}/sales/sale-2`),
+          baseSale({
+            receiptNumber: 'sale-2',
+            total: 22000,
+            payments: [
+              { method: 'customerAccount', amountNaira: 22000, customerId: 'cust-1', customerName: 'Ngozi Eze' },
+            ],
+          }),
+        );
         transaction.set(
           doc(db, `businesses/${BIZ}/gasStock/current`),
           { units: 833000 },
@@ -217,10 +223,303 @@ describe('checkout commit — the real transaction FirebaseCheckoutRepository.co
         transaction.update(doc(db, `businesses/${BIZ}/shiftState/current`), {
           creditTotalNaira: 22000,
           salesCount: 1,
+          lastSaleId: 'sale-2',
         });
       }),
     );
   });
+
+  it('ALLOWS a split-tender sale — card + cash, no change — the new capability this phase adds', async () => {
+    await seedAttendant(BIZ, 'attendant-uid');
+    await seedOpenShift(BIZ);
+
+    const db = asUser('attendant-uid', 'attendant@example.com');
+    await assertSucceeds(
+      runTransaction(db, async (transaction) => {
+        transaction.set(
+          doc(db, `businesses/${BIZ}/sales/sale-split`),
+          baseSale({
+            receiptNumber: 'sale-split',
+            total: 15000,
+            payments: [
+              { method: 'card', amountNaira: 10000 },
+              { method: 'cash', amountNaira: 5000 },
+            ],
+          }),
+        );
+        transaction.update(doc(db, `businesses/${BIZ}/shiftState/current`), {
+          cardTotalNaira: 10000,
+          cashTotalNaira: 5000,
+          salesCount: 1,
+          lastSaleId: 'sale-split',
+        });
+      }),
+    );
+
+    await seed(async (adminDb) => {
+      const shiftSnap = await getDoc(doc(adminDb, `businesses/${BIZ}/shiftState/current`));
+      assert.equal(shiftSnap.data().cardTotalNaira, 10000);
+      assert.equal(shiftSnap.data().cashTotalNaira, 5000);
+    });
+  });
+
+  it(
+    'ALLOWS overpay-by-transfer with cash change — the exact new scenario this feature adds: '
+    + 'a negative cash line nets correctly against cashTotalNaira with no separate field needed',
+    async () => {
+      await seedAttendant(BIZ, 'attendant-uid');
+      await seedOpenShift(BIZ, { cashTotalNaira: 2000 }); // some cash already in the drawer this shift
+
+      const db = asUser('attendant-uid', 'attendant@example.com');
+      await assertSucceeds(
+        runTransaction(db, async (transaction) => {
+          transaction.set(
+            doc(db, `businesses/${BIZ}/sales/sale-change`),
+            baseSale({
+              receiptNumber: 'sale-change',
+              total: 15000,
+              payments: [
+                { method: 'transfer', amountNaira: 20000 },
+                { method: 'cash', amountNaira: -5000 },
+              ],
+            }),
+          );
+          transaction.update(doc(db, `businesses/${BIZ}/shiftState/current`), {
+            transferTotalNaira: 20000,
+            cashTotalNaira: -3000, // resulting absolute value: 2000 (seeded) + (-5000) delta
+            salesCount: 1,
+            lastSaleId: 'sale-change',
+          });
+        }),
+      );
+
+      await seed(async (adminDb) => {
+        const shiftSnap = await getDoc(doc(adminDb, `businesses/${BIZ}/shiftState/current`));
+        assert.equal(shiftSnap.data().transferTotalNaira, 20000);
+        // 2000 (already there) + (-5000 increment) = -3000, correctly
+        // negative — this shift gave out more cash as change than it
+        // took in as cash sales, a real signal, not a bug.
+        assert.equal(shiftSnap.data().cashTotalNaira, -3000);
+      });
+    },
+  );
+
+  it('DENIES the whole transaction when the payments don\'t sum to the total', async () => {
+    await seedAttendant(BIZ, 'attendant-uid');
+    await seedOpenShift(BIZ);
+
+    const db = asUser('attendant-uid', 'attendant@example.com');
+    await assertFails(
+      runTransaction(db, async (transaction) => {
+        transaction.set(
+          doc(db, `businesses/${BIZ}/sales/sale-bad-sum`),
+          baseSale({
+            receiptNumber: 'sale-bad-sum',
+            total: 15000,
+            payments: [{ method: 'cash', amountNaira: 10000 }], // short by 5000
+          }),
+        );
+        transaction.update(doc(db, `businesses/${BIZ}/shiftState/current`), {
+          cashTotalNaira: 10000,
+          salesCount: 1,
+          lastSaleId: 'sale-bad-sum',
+        });
+      }),
+    );
+  });
+
+  it('DENIES the whole transaction for a negative card line — only cash may ever be negative', async () => {
+    await seedAttendant(BIZ, 'attendant-uid');
+    await seedOpenShift(BIZ);
+
+    const db = asUser('attendant-uid', 'attendant@example.com');
+    await assertFails(
+      runTransaction(db, async (transaction) => {
+        transaction.set(
+          doc(db, `businesses/${BIZ}/sales/sale-bad-neg`),
+          baseSale({
+            receiptNumber: 'sale-bad-neg',
+            total: 15000,
+            payments: [
+              { method: 'transfer', amountNaira: 20000 },
+              { method: 'card', amountNaira: -5000 }, // change must be cash
+            ],
+          }),
+        );
+        transaction.update(doc(db, `businesses/${BIZ}/shiftState/current`), {
+          transferTotalNaira: 20000,
+          cardTotalNaira: -5000,
+          salesCount: 1,
+          lastSaleId: 'sale-bad-neg',
+        });
+      }),
+    );
+  });
+
+  it('DENIES the whole transaction for two customerAccount lines', async () => {
+    await seedAttendant(BIZ, 'attendant-uid');
+    await seedCustomer(BIZ, 'cust-1', 0);
+    await seedCustomer(BIZ, 'cust-2', 0);
+    await seedOpenShift(BIZ);
+
+    const db = asUser('attendant-uid', 'attendant@example.com');
+    await assertFails(
+      runTransaction(db, async (transaction) => {
+        transaction.set(
+          doc(db, `businesses/${BIZ}/sales/sale-two-credit`),
+          baseSale({
+            receiptNumber: 'sale-two-credit',
+            total: 15000,
+            payments: [
+              { method: 'customerAccount', amountNaira: 10000, customerId: 'cust-1', customerName: 'A' },
+              { method: 'customerAccount', amountNaira: 5000, customerId: 'cust-2', customerName: 'B' },
+            ],
+          }),
+        );
+        transaction.update(doc(db, `businesses/${BIZ}/shiftState/current`), {
+          creditTotalNaira: 15000,
+          salesCount: 1,
+          lastSaleId: 'sale-two-credit',
+        });
+      }),
+    );
+  });
+
+  it('DENIES the whole transaction with more than 4 payment lines — the kMaxPaymentLines cap', async () => {
+    await seedAttendant(BIZ, 'attendant-uid');
+    await seedOpenShift(BIZ);
+
+    const db = asUser('attendant-uid', 'attendant@example.com');
+    await assertFails(
+      runTransaction(db, async (transaction) => {
+        transaction.set(
+          doc(db, `businesses/${BIZ}/sales/sale-too-many`),
+          baseSale({
+            receiptNumber: 'sale-too-many',
+            total: 15000,
+            payments: [
+              { method: 'cash', amountNaira: 3000 },
+              { method: 'card', amountNaira: 3000 },
+              { method: 'transfer', amountNaira: 3000 },
+              { method: 'cash', amountNaira: 3000 },
+              { method: 'cash', amountNaira: 3000 },
+            ],
+          }),
+        );
+        transaction.update(doc(db, `businesses/${BIZ}/shiftState/current`), {
+          cashTotalNaira: 9000,
+          cardTotalNaira: 3000,
+          transferTotalNaira: 3000,
+          salesCount: 1,
+          lastSaleId: 'sale-too-many',
+        });
+      }),
+    );
+  });
+
+  it(
+    'ALLOWS a self-consistent but fictionally large change line — documenting the residual risk, not '
+    + 'a gap this phase claims to close: a sale claiming a ₦54,500 transfer and ₦50,000 cash change is '
+    + 'internally self-consistent (sums to the claimed total, shiftState matches the sale), so it is NOT '
+    + 'rejected — the same accepted boundary as sale.total never being checked against real cart '
+    + 'contents. What IS closed is shiftState disagreeing with its own paired sale — see the next test.',
+    async () => {
+      await seedAttendant(BIZ, 'attendant-uid');
+      await seedOpenShift(BIZ, { cashTotalNaira: 50000 });
+
+      const db = asUser('attendant-uid', 'attendant@example.com');
+      await assertSucceeds(
+        runTransaction(db, async (transaction) => {
+          transaction.set(
+            doc(db, `businesses/${BIZ}/sales/sale-siphon`),
+            baseSale({
+              receiptNumber: 'sale-siphon',
+              total: 4500,
+              payments: [
+                { method: 'transfer', amountNaira: 54500 },
+                { method: 'cash', amountNaira: -50000 },
+              ],
+            }),
+          );
+          transaction.update(doc(db, `businesses/${BIZ}/shiftState/current`), {
+            transferTotalNaira: 54500,
+            cashTotalNaira: 0, // resulting absolute value: 50000 (seeded) + (-50000) delta
+            salesCount: 1,
+            lastSaleId: 'sale-siphon',
+          });
+        }),
+      );
+    },
+  );
+
+  it(
+    'DENIES the whole transaction when shiftState claims a DIFFERENT cash decrement than the paired '
+    + 'sale actually records — shiftState and the sale can no longer just agree with each other on a '
+    + 'fabricated number without the sale itself backing it up',
+    async () => {
+      await seedAttendant(BIZ, 'attendant-uid');
+      await seedOpenShift(BIZ, { cashTotalNaira: 50000, transferTotalNaira: 0 });
+
+      const db = asUser('attendant-uid', 'attendant@example.com');
+      await assertFails(
+        runTransaction(db, async (transaction) => {
+          // A real, honestly small sale...
+          transaction.set(
+            doc(db, `businesses/${BIZ}/sales/sale-mismatch`),
+            baseSale({
+              receiptNumber: 'sale-mismatch',
+              total: 4500,
+              payments: [
+                { method: 'transfer', amountNaira: 5000 },
+                { method: 'cash', amountNaira: -500 },
+              ],
+            }),
+          );
+          // ...paired with a shiftState update that claims a much
+          // bigger cash outflow than that sale actually says.
+          transaction.update(doc(db, `businesses/${BIZ}/shiftState/current`), {
+            transferTotalNaira: 5000,
+            cashTotalNaira: -45000,
+            salesCount: 1,
+            lastSaleId: 'sale-mismatch',
+          });
+        }),
+      );
+    },
+  );
+
+  it(
+    'DENIES the whole transaction when lastSaleId points at an OLD, already-existing sale — the '
+    + 'anti-replay check: a genuinely new totals change has to be paired with a genuinely new sale, '
+    + 'not one reused to "prove" a fresh change',
+    async () => {
+      await seedAttendant(BIZ, 'attendant-uid');
+      // A real, honest sale from earlier.
+      await seed(async (db) => {
+        await setDoc(
+          doc(db, `businesses/${BIZ}/sales/old-sale`),
+          baseSale({
+            receiptNumber: 'old-sale',
+            total: 5000,
+            payments: [{ method: 'cash', amountNaira: 5000 }],
+          }),
+        );
+      });
+      await seedOpenShift(BIZ);
+
+      const db = asUser('attendant-uid', 'attendant@example.com');
+      // A bare shiftState update — no new sale created in this write —
+      // that reuses old-sale's id and its already-true totals to "prove"
+      // a fresh change with nothing new actually recorded.
+      await assertFails(
+        updateDoc(doc(db, `businesses/${BIZ}/shiftState/current`), {
+          cashTotalNaira: 5000,
+          salesCount: 1,
+          lastSaleId: 'old-sale',
+        }),
+      );
+    },
+  );
 
   it('DENIES the whole transaction when no shift is open — an otherwise entirely valid sale, blocked purely '
     + 'by the missing shiftState/current, the real server-side enforcement of "open the day first"', async () => {
@@ -231,20 +530,14 @@ describe('checkout commit — the real transaction FirebaseCheckoutRepository.co
     const db = asUser('attendant-uid', 'attendant@example.com');
     await assertFails(
       runTransaction(db, async (transaction) => {
-        transaction.set(doc(db, `businesses/${BIZ}/sales/sale-no-shift`), {
-          receiptNumber: 'sale-no-shift',
-          items: [],
-          subtotal: 15000,
-          total: 15000,
-          method: 'cash',
-          cashGiven: 15000,
-          changeGiven: 0,
-          customerId: null,
-          customerName: null,
-          staffId: 'attendant-uid',
-          staffName: 'Attendant',
-          createdAt: new Date().toISOString(),
-        });
+        transaction.set(
+          doc(db, `businesses/${BIZ}/sales/sale-no-shift`),
+          baseSale({
+            receiptNumber: 'sale-no-shift',
+            total: 15000,
+            payments: [{ method: 'cash', amountNaira: 15000 }],
+          }),
+        );
         transaction.update(doc(db, `businesses/${BIZ}/products/prod-1`), { stockCount: 8 });
       }),
     );
@@ -265,20 +558,14 @@ describe('checkout commit — the real transaction FirebaseCheckoutRepository.co
     const db = asUser('attendant-uid', 'attendant@example.com');
     await assertFails(
       runTransaction(db, async (transaction) => {
-        transaction.set(doc(db, `businesses/${BIZ}/sales/sale-3`), {
-          receiptNumber: 'sale-3',
-          items: [],
-          subtotal: 30000,
-          total: 30000,
-          method: 'cash',
-          cashGiven: 30000,
-          changeGiven: 0,
-          customerId: null,
-          customerName: null,
-          staffId: 'attendant-uid',
-          staffName: 'Attendant',
-          createdAt: new Date().toISOString(),
-        });
+        transaction.set(
+          doc(db, `businesses/${BIZ}/sales/sale-3`),
+          baseSale({
+            receiptNumber: 'sale-3',
+            total: 30000,
+            payments: [{ method: 'cash', amountNaira: 30000 }],
+          }),
+        );
         // Two of the last one — would go to -1.
         transaction.update(doc(db, `businesses/${BIZ}/products/prod-1`), { stockCount: -1 });
       }),
@@ -304,20 +591,14 @@ describe('checkout commit — the real transaction FirebaseCheckoutRepository.co
       const db = asUser('attendant-uid', 'attendant@example.com');
       await assertFails(
         runTransaction(db, async (transaction) => {
-          transaction.set(doc(db, `businesses/${BIZ}/sales/sale-4`), {
-            receiptNumber: 'sale-4',
-            items: [],
-            subtotal: 15000,
-            total: 15000,
-            method: 'cash',
-            cashGiven: 15000,
-            changeGiven: 0,
-            customerId: null,
-            customerName: null,
-            staffId: 'attendant-uid',
-            staffName: 'Attendant',
-            createdAt: new Date().toISOString(),
-          });
+          transaction.set(
+            doc(db, `businesses/${BIZ}/sales/sale-4`),
+            baseSale({
+              receiptNumber: 'sale-4',
+              total: 15000,
+              payments: [{ method: 'cash', amountNaira: 15000 }],
+            }),
+          );
           transaction.update(doc(db, `businesses/${BIZ}/products/prod-1`), {
             stockCount: 8,
             price: 1, // smuggled reprice
@@ -340,20 +621,14 @@ describe('checkout commit — the real transaction FirebaseCheckoutRepository.co
     const db = asUser('attendant-uid', 'attendant@example.com');
     await assertFails(
       runTransaction(db, async (transaction) => {
-        transaction.set(doc(db, `businesses/${BIZ}/sales/sale-5`), {
-          receiptNumber: 'sale-5',
-          items: [],
-          subtotal: 15000,
-          total: 15000,
-          method: 'cash',
-          cashGiven: 15000,
-          changeGiven: 0,
-          customerId: null,
-          customerName: null,
-          staffId: 'attendant-uid',
-          staffName: 'Attendant',
-          createdAt: new Date().toISOString(),
-        });
+        transaction.set(
+          doc(db, `businesses/${BIZ}/sales/sale-5`),
+          baseSale({
+            receiptNumber: 'sale-5',
+            total: 15000,
+            payments: [{ method: 'cash', amountNaira: 15000 }],
+          }),
+        );
         transaction.update(doc(db, `businesses/${BIZ}/products/prod-1`), { stockCount: 8 });
       }),
     );

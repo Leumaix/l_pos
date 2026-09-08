@@ -82,6 +82,105 @@ service cloud.firestore {
         && historyDoc.data.expectedCashNaira == openingFloatNaira + cashTotalNaira;
     }
 
+    // Split-tender helpers — a sale's `payments` list, up to
+    // kMaxPaymentLines (4, see lib/features/sell/domain/checkout.dart)
+    // entries. These are all bounded, indexed expressions rather than a
+    // loop: the rules language has no native sum/reduce/map over an
+    // arbitrary-length list, so every one of these is written out by
+    // hand for up to 4 slots — verbose, but the only way to validate a
+    // variable-length list's contents here at all. A list longer than 4
+    // simply can't satisfy paymentsAreValid below (see its own comment).
+
+    // Sums every line's amountNaira — the core "do the payments add up
+    // to the total" check. A list of the wrong length (0 or >4) falls
+    // through to the sentinel, which can never equal a real total.
+    function paymentsSum(payments) {
+      return payments.size() == 1 ? payments[0].amountNaira :
+             payments.size() == 2 ? payments[0].amountNaira + payments[1].amountNaira :
+             payments.size() == 3 ? payments[0].amountNaira + payments[1].amountNaira + payments[2].amountNaira :
+             payments.size() == 4 ? payments[0].amountNaira + payments[1].amountNaira + payments[2].amountNaira + payments[3].amountNaira :
+             -999999999999;
+    }
+
+    // Sums only the lines matching one method — used to cross-check each
+    // of shiftState's 4 per-method totals against what a paired sale's
+    // payments actually say (see shiftTotalsMatchSale below). A line not
+    // matching contributes 0, same bounded-indexed shape as paymentsSum.
+    function paymentsSumForMethod(payments, method) {
+      return (payments.size() >= 1 && payments[0].method == method ? payments[0].amountNaira : 0)
+           + (payments.size() >= 2 && payments[1].method == method ? payments[1].amountNaira : 0)
+           + (payments.size() >= 3 && payments[2].method == method ? payments[2].amountNaira : 0)
+           + (payments.size() >= 4 && payments[3].method == method ? payments[3].amountNaira : 0);
+    }
+
+    // One line's own shape, independent of the others: a real method
+    // name, a nonzero amount, and — the one place a negative amount is
+    // ever legitimate — only ever negative on a cash line (change given
+    // back, on any overpaid method, is always physical cash; see
+    // PaymentLine's own doc comment in sale.dart for why).
+    function paymentLineIsValid(line) {
+      return line.method in ['cash', 'card', 'transfer', 'customerAccount']
+        && line.amountNaira is number
+        && line.amountNaira != 0
+        && (line.amountNaira > 0 || line.method == 'cash');
+    }
+
+    // The full shape check for a create: 1-4 lines, every one
+    // individually valid, at most one customerAccount line, and any
+    // customerAccount line actually carries a customerId — mirrors
+    // buildSale's own client-side validation exactly (see checkout.dart),
+    // just re-expressed as a bounded rules expression instead of a Dart
+    // loop.
+    function paymentsAreValid(payments) {
+      return payments.size() >= 1 && payments.size() <= 4
+        && paymentLineIsValid(payments[0])
+        && (payments.size() < 2 || paymentLineIsValid(payments[1]))
+        && (payments.size() < 3 || paymentLineIsValid(payments[2]))
+        && (payments.size() < 4 || paymentLineIsValid(payments[3]))
+        && (
+             (payments.size() >= 1 && payments[0].method == 'customerAccount' ? 1 : 0)
+           + (payments.size() >= 2 && payments[1].method == 'customerAccount' ? 1 : 0)
+           + (payments.size() >= 3 && payments[2].method == 'customerAccount' ? 1 : 0)
+           + (payments.size() >= 4 && payments[3].method == 'customerAccount' ? 1 : 0)
+           ) <= 1
+        && (payments.size() < 1 || payments[0].method != 'customerAccount' || payments[0].customerId is string)
+        && (payments.size() < 2 || payments[1].method != 'customerAccount' || payments[1].customerId is string)
+        && (payments.size() < 3 || payments[2].method != 'customerAccount' || payments[2].customerId is string)
+        && (payments.size() < 4 || payments[3].method != 'customerAccount' || payments[3].customerId is string);
+    }
+
+    // The one customerAccount line's amount for a specific customer, if
+    // any — paymentsAreValid already guarantees at most one exists on a
+    // real sale, so this is a real, meaningful lookup. -1 (a value no
+    // real amountNaira can ever be — see paymentLineIsValid) if none
+    // matches, so a caller comparing against it correctly fails closed.
+    function creditLineAmount(payments, customerId) {
+      return
+        (payments.size() >= 1 && payments[0].method == 'customerAccount' && payments[0].customerId == customerId) ? payments[0].amountNaira :
+        (payments.size() >= 2 && payments[1].method == 'customerAccount' && payments[1].customerId == customerId) ? payments[1].amountNaira :
+        (payments.size() >= 3 && payments[2].method == 'customerAccount' && payments[2].customerId == customerId) ? payments[2].amountNaira :
+        (payments.size() >= 4 && payments[3].method == 'customerAccount' && payments[3].customerId == customerId) ? payments[3].amountNaira :
+        -1;
+    }
+
+    // Cross-checks shiftState/current's per-method increment amounts
+    // (before -> after) against what the sale referenced by lastSaleId
+    // actually says it was paid — the piece that closes the "inflate a
+    // change-given amount to siphon cash" gap: shiftState and the sale
+    // it's paired with can no longer just agree with each other on a
+    // number that doesn't match what the sale itself records. The
+    // caller is responsible for the anti-replay check (the sale must not
+    // have existed before this write) — see the shiftState update rule.
+    function shiftTotalsMatchSale(businessId, saleId, before, after) {
+      let sale = getAfter(/databases/$(database)/documents/businesses/$(businessId)/sales/$(saleId));
+      let payments = sale.data.payments;
+      return after.cashTotalNaira - before.cashTotalNaira == paymentsSumForMethod(payments, 'cash')
+        && after.cardTotalNaira - before.cardTotalNaira == paymentsSumForMethod(payments, 'card')
+        && after.transferTotalNaira - before.transferTotalNaira == paymentsSumForMethod(payments, 'transfer')
+        && after.creditTotalNaira - before.creditTotalNaira == paymentsSumForMethod(payments, 'customerAccount')
+        && after.salesCount - before.salesCount == 1;
+    }
+
     // Platform-operator config, not scoped to any business. Deliberately
     // unreadable and unwritable from any client, even a recognized
     // super-admin — see isPlatformSuperAdmin()'s own comment for why its
@@ -408,7 +507,47 @@ service cloud.firestore {
           // Append-only ledger — a correction is a new transaction, not
           // an edit to history.
           allow read: if isActiveStaffOf(businessId) || isPlatformSuperAdmin();
-          allow create: if isActiveStaffOf(businessId);
+
+          // A creditSale entry gets the full pairing rigor: the sale it
+          // claims (saleId) must be genuinely new (same anti-replay
+          // reasoning as shiftState's lastSaleId above — otherwise an
+          // OLD, already-existing sale could be pointed at to "prove" a
+          // fabricated amount), that sale's own customerAccount line FOR
+          // THIS CUSTOMER must carry the exact amount being recorded
+          // here (creditLineAmount — correct for a split sale where only
+          // part of the total was charged to this customer, not just
+          // sale.total), and balanceAfter must arithmetically follow
+          // from the pre-write balance plus this amount — closing the
+          // gap where a transaction doc's amountNaira and balanceAfter
+          // could previously disagree with each other with nothing
+          // checking either against the real sale.
+          //
+          // repayment/openingBalance entries have no sale to check
+          // against (saleId is always null for both — see
+          // FirebaseCustomerRepository) and keep exactly today's
+          // trust boundary: staff-attributed and paired with the
+          // customer's balance update (via lastTransactionId, see that
+          // rule), but not independently re-derived from history —
+          // same accepted MVP boundary as every other ledger amountNaira
+          // in this file. openingBalance specifically COULDN'T support
+          // the same get()-the-customer check even if desired: that
+          // customer doc doesn't exist yet at the time this doc is
+          // validated, both being created in the same write.
+          allow create: if isActiveStaffOf(businessId)
+            && (
+              request.resource.data.type != 'creditSale'
+              || (
+                request.resource.data.saleId is string
+                && !exists(/databases/$(database)/documents/businesses/$(businessId)/sales/$(request.resource.data.saleId))
+                && creditLineAmount(
+                     getAfter(/databases/$(database)/documents/businesses/$(businessId)/sales/$(request.resource.data.saleId)).data.payments,
+                     customerId
+                   ) == request.resource.data.amountNaira
+                && request.resource.data.balanceAfter ==
+                   get(/databases/$(database)/documents/businesses/$(businessId)/customers/$(customerId)).data.balance
+                   + request.resource.data.amountNaira
+              )
+            );
           allow update, delete: if false;
         }
       }
@@ -436,8 +575,24 @@ service cloud.firestore {
         // side error instead of a raw permission-denied, but this is
         // what actually can't be bypassed.
         allow read: if isActiveOwnerOf(businessId) || isPlatformSuperAdmin();
+        // The exists() check above is unrelated to the payments shape
+        // check that follows it — both have to hold. paymentsAreValid +
+        // the sum check together are the real-money half of "no ringing
+        // up a sale before the day is opened": a self-consistent but
+        // shape-invalid split (wrong sum, two customerAccount lines, a
+        // negative card line, more than 4 lines) is rejected here,
+        // before it ever reaches the shiftState/customer cross-checks
+        // that depend on this sale actually existing. See paymentsSum's
+        // own comment for what this does and doesn't close — a fully
+        // malicious client bypassing the real app can still choose
+        // total AND every payment line to agree with each other; this
+        // can't and isn't trying to detect that, same accepted boundary
+        // as sale.total never being checked against cart contents.
         allow create: if isActiveStaffOf(businessId)
-          && exists(/databases/$(database)/documents/businesses/$(businessId)/shiftState/current);
+          && exists(/databases/$(database)/documents/businesses/$(businessId)/shiftState/current)
+          && request.resource.data.payments is list
+          && paymentsAreValid(request.resource.data.payments)
+          && paymentsSum(request.resource.data.payments) == request.resource.data.total;
         allow update, delete: if false;
       }
 
@@ -465,9 +620,28 @@ service cloud.firestore {
         // Sale-time totals increment ONLY — never openingFloat/openedBy/
         // plannedHistoryId/etc. This is the one write
         // FirebaseCheckoutRepository.commitSale performs mid-transaction.
+        // lastSaleId is written every time alongside the totals — same
+        // pairing pattern customers/{customerId}'s own lastTransactionId
+        // already uses — and shiftTotalsMatchSale cross-checks that the
+        // actual increment amounts match what that exact sale's payments
+        // say, closing the gap where nothing previously stopped
+        // shiftState and a sale from simply disagreeing (or a
+        // fabricated, inflated "change given" from moving cashTotalNaira
+        // by any amount with nothing tying it back to a real sale). The
+        // !exists() check is the same anti-replay fix as
+        // customers/{customerId}'s own lastTransactionId pairing — see
+        // that rule's comment for the exact hole it closes: without it,
+        // lastSaleId could point at an OLD, already-existing sale
+        // (staff can read the whole collection... except sales is
+        // owner-read-only, but a modified client could still guess/reuse
+        // an id it already wrote) to "prove" a fabricated totals change
+        // with no new sale ever created for it.
         allow update: if isActiveStaffOf(businessId)
           && request.resource.data.diff(resource.data).affectedKeys()
-             .hasOnly(['cashTotalNaira', 'cardTotalNaira', 'transferTotalNaira', 'creditTotalNaira', 'salesCount']);
+             .hasOnly(['cashTotalNaira', 'cardTotalNaira', 'transferTotalNaira', 'creditTotalNaira', 'salesCount', 'lastSaleId'])
+          && request.resource.data.lastSaleId is string
+          && !exists(/databases/$(database)/documents/businesses/$(businessId)/sales/$(request.resource.data.lastSaleId))
+          && shiftTotalsMatchSale(businessId, request.resource.data.lastSaleId, resource.data, request.resource.data);
 
         // Closing a shift deletes this doc — the ONLY way "a shift is
         // open" ever becomes false again. This is a real data-loss risk
