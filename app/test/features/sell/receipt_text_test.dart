@@ -1,5 +1,4 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:leumadepos/features/customers/domain/customer.dart';
 import 'package:leumadepos/features/sell/domain/cart.dart';
 import 'package:leumadepos/features/sell/domain/checkout.dart';
 import 'package:leumadepos/features/sell/domain/product.dart';
@@ -21,13 +20,15 @@ void main() {
 
     return buildSale(
       cart: cart,
-      method: PaymentMethod.cash,
+      payments: const [
+        PaymentLine(method: PaymentMethod.cash, amountNaira: 35000),
+        PaymentLine(method: PaymentMethod.cash, amountNaira: -5000),
+      ],
       staffId: 'staff-1',
       staffName: 'Ifeoma',
       id: 'sale-1',
       receiptNumber: 'R-1',
       createdAt: DateTime(2026, 9, 2, 14, 30),
-      cashGiven: 35000,
     );
   }
 
@@ -66,18 +67,19 @@ void main() {
       var cart = addProduct(const Cart(), cylinder, lineId: 'l1').cart;
       final sale = buildSale(
         cart: cart,
-        method: PaymentMethod.customerAccount,
+        payments: [
+          PaymentLine(
+            method: PaymentMethod.customerAccount,
+            amountNaira: cart.total,
+            customerId: 'cust-1',
+            customerName: 'Ngozi Eze',
+          ),
+        ],
         staffId: 'staff-1',
         staffName: 'Ifeoma',
         id: 'sale-2',
         receiptNumber: 'R-2',
         createdAt: DateTime(2026, 9, 2, 14, 30),
-        customer: const Customer(
-          id: 'cust-1',
-          name: 'Ngozi Eze',
-          phone: '08051112222',
-          balance: 0,
-        ),
       );
 
       final text = formatReceiptText(sale, businessName: 'PH-Zazaa Oil & Gas');

@@ -93,16 +93,23 @@ class FakeCheckoutRepository implements CheckoutRepository {
       await _inventory.decrementProductStock(line.product.id, line.quantity);
     }
 
-    if (sale.method == PaymentMethod.customerAccount) {
+    final creditLine = sale.customerAccountLine;
+    if (creditLine != null) {
       await _customers.recordCreditSale(
-        customerId: sale.customerId!,
-        amountNaira: sale.total,
+        customerId: creditLine.customerId!,
+        amountNaira: creditLine.amountNaira,
         saleId: sale.id,
       );
     }
 
     await _sales.recordSale(sale);
-    _shift.debugApplySaleTotals(method: sale.method, amountNaira: sale.total);
+    // Once per payment line — not once per sale — so a split correctly
+    // touches every method it used, and a negative cash line (change
+    // given, on any method) nets against cashTotalNaira exactly like the
+    // real FirebaseCheckoutRepository's grouped increment below.
+    for (final line in sale.payments) {
+      _shift.debugApplySaleTotals(method: line.method, amountNaira: line.amountNaira);
+    }
   }
 }
 
@@ -162,8 +169,8 @@ class FirebaseCheckoutRepository implements CheckoutRepository {
 
   @override
   Future<void> commitSale({required Sale sale, required int gasUnitsDeducted}) async {
-    final isCreditSale = sale.method == PaymentMethod.customerAccount;
-    final customerRef = isCreditSale ? _customersCollection.doc(sale.customerId!) : null;
+    final creditLine = sale.customerAccountLine;
+    final customerRef = creditLine != null ? _customersCollection.doc(creditLine.customerId!) : null;
     // Minted up front (synchronous — .doc() with no args just generates
     // an id) so the customer update below can reference it via
     // lastTransactionId; firestore.rules requires that pairing for any
@@ -180,16 +187,25 @@ class FirebaseCheckoutRepository implements CheckoutRepository {
       if (customerRef != null) {
         final customerSnapshot = await transaction.get(customerRef);
         final currentBalance = (customerSnapshot.data()?['balance'] as num? ?? 0).toInt();
-        newCustomerBalance = currentBalance + sale.total;
+        newCustomerBalance = currentBalance + creditLine!.amountNaira;
       }
 
       transaction.set(_salesCollection.doc(sale.id), FirebaseSalesRepository.saleToDoc(sale));
 
-      // The shift's running per-method total — see shiftState/current's
+      // The shift's running per-method totals — see shiftState/current's
       // update rule in firestore.rules, scoped to exactly these fields.
+      // Grouped by method first (not one increment call per payment
+      // line): a Firestore update() can only touch a given field once,
+      // so a split sale with two lines on the same method (e.g. a cash
+      // payment plus a separate cash change line) has to net out into a
+      // single increment amount per field before this map is built.
+      final totalsByMethod = <PaymentMethod, int>{};
+      for (final line in sale.payments) {
+        totalsByMethod[line.method] = (totalsByMethod[line.method] ?? 0) + line.amountNaira;
+      }
       transaction.update(_shiftStateDoc, {
-        _shiftTotalFieldByMethod[sale.method]!: FieldValue.increment(sale.total),
         'salesCount': FieldValue.increment(1),
+        for (final entry in totalsByMethod.entries) _shiftTotalFieldByMethod[entry.key]!: FieldValue.increment(entry.value),
       });
 
       if (gasUnitsDeducted != 0) {
@@ -217,7 +233,10 @@ class FirebaseCheckoutRepository implements CheckoutRepository {
         transaction.update(customerRef, {'balance': newCustomerBalance, 'lastTransactionId': customerTxRef!.id});
         transaction.set(customerTxRef, {
           'type': 'creditSale',
-          'amountNaira': sale.total,
+          // The customerAccount line's own amount — not sale.total, which
+          // may be larger on a split sale where only PART of the total was
+          // charged to this customer's account.
+          'amountNaira': creditLine!.amountNaira,
           'balanceAfter': newCustomerBalance,
           'createdAt': FieldValue.serverTimestamp(),
           'saleId': sale.id,
