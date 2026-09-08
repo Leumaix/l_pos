@@ -67,7 +67,7 @@ void main() {
 
     final sale = await container
         .read(checkoutControllerProvider)
-        .completeSale(method: PaymentMethod.cash, cashGiven: expectedTotal);
+        .completeSale(payments: [PaymentLine(method: PaymentMethod.cash, amountNaira: expectedTotal)]);
 
     expect(inventory.currentGasStock.units, startingGas - sale.total);
     final recorded = await sales.watchSales().first;
@@ -79,7 +79,7 @@ void main() {
 
     final sale = await container
         .read(checkoutControllerProvider)
-        .completeSale(method: PaymentMethod.cash, cashGiven: 15000);
+        .completeSale(payments: const [PaymentLine(method: PaymentMethod.cash, amountNaira: 15000)]);
 
     expect(inventory.currentProducts.firstWhere((p) => p.id == _testProduct.id).stockCount, 8);
     final recorded = await sales.watchSales().first;
@@ -98,7 +98,7 @@ void main() {
 
     final sale = await container
         .read(checkoutControllerProvider)
-        .completeSale(method: PaymentMethod.cash, cashGiven: expectedTotal);
+        .completeSale(payments: [PaymentLine(method: PaymentMethod.cash, amountNaira: expectedTotal)]);
 
     expect(inventory.currentProducts.firstWhere((p) => p.id == _testProduct.id).stockCount, 8);
     expect(inventory.currentGasStock.units, lessThan(startingGas));
@@ -108,10 +108,18 @@ void main() {
   test('a customer-account sale records a credit sale against the chosen customer', () async {
     container.read(cartControllerProvider.notifier).addCartProduct(_testProduct);
     const customer = Customer(id: 'cust-1', name: 'Ngozi Eze', phone: '08051112222', balance: 5000);
+    final cartTotal = container.read(cartControllerProvider).total;
 
-    final sale = await container
-        .read(checkoutControllerProvider)
-        .completeSale(method: PaymentMethod.customerAccount, customer: customer);
+    final sale = await container.read(checkoutControllerProvider).completeSale(
+      payments: [
+        PaymentLine(
+          method: PaymentMethod.customerAccount,
+          amountNaira: cartTotal,
+          customerId: customer.id,
+          customerName: customer.name,
+        ),
+      ],
+    );
 
     final allCustomers = await customers.watchCustomers().first;
     expect(allCustomers.firstWhere((c) => c.id == 'cust-1').balance, 5000 + sale.total);
@@ -122,7 +130,7 @@ void main() {
 
     final sale = await container
         .read(checkoutControllerProvider)
-        .completeSale(method: PaymentMethod.cash, cashGiven: 15000);
+        .completeSale(payments: const [PaymentLine(method: PaymentMethod.cash, amountNaira: 15000)]);
 
     final recorded = await sales.watchSales().first;
     expect(recorded.single.id, sale.id);

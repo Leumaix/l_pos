@@ -15,6 +15,7 @@ import '../../customers/presentation/customer_form_sheet.dart';
 import '../application/cart_controller.dart';
 import '../application/checkout_controller.dart';
 import '../application/pending_credit_customer_provider.dart';
+import '../domain/checkout.dart';
 import '../domain/sale.dart';
 
 class PaymentScreen extends ConsumerStatefulWidget {
@@ -31,14 +32,29 @@ class PaymentScreen extends ConsumerStatefulWidget {
   ConsumerState<PaymentScreen> createState() => _PaymentScreenState();
 }
 
+/// Single-method-by-default, split-by-deliberate-action. The fast path
+/// (pick one method, pay, done) is exactly today's flow — no extra taps,
+/// nothing new to look at — and falls out of the SAME state/logic a split
+/// uses, rather than being a separate code path: with [_committedLines]
+/// empty and [_amountEntryRevealed] false, [_remaining] always equals the
+/// cart total and [_needsAmountEntry] is only ever true for cash, which is
+/// exactly today's behavior. Splitting only begins once staff explicitly
+/// reveal an amount field on a non-cash method or commit a line via "Add
+/// another payment method" — see [_needsAmountEntry]/[_canAddAnotherMethod].
 class _PaymentScreenState extends ConsumerState<PaymentScreen> {
   PaymentMethod? _method;
-  String _cashInput = '';
+  String _amountInput = '';
+  bool _amountEntryRevealed = false;
   Customer? _selectedCustomer;
   String _customerSearch = '';
   bool _submitting = false;
   bool _saleCompleted = false;
   String? _error;
+
+  /// Lines already committed via "Add another payment method" — empty for
+  /// every single-method sale, which is most of them. [_method] is always
+  /// the CURRENT, not-yet-committed line being entered.
+  final List<PaymentLine> _committedLines = [];
 
   @override
   void initState() {
@@ -57,22 +73,94 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
     }
   }
 
-  int? get _cashGiven => _cashInput.isEmpty ? null : int.tryParse(_cashInput);
+  int? get _amountGiven => _amountInput.isEmpty ? null : int.tryParse(_amountInput);
+
+  int get _committedSum => _committedLines.fold(0, (sum, line) => sum + line.amountNaira);
+
+  int _remaining(int total) => total - _committedSum;
+
+  /// True once this line needs its own typed amount rather than
+  /// implicitly covering whatever's left: always true for cash (matches
+  /// today), true for any method once staff have deliberately revealed
+  /// it (see [_revealAmountEntry]), and true unconditionally once a split
+  /// is already under way — a second or third line always needs its own
+  /// amount, never an implicit "the rest" guess.
+  bool get _needsAmountEntry =>
+      _method == PaymentMethod.cash || _amountEntryRevealed || _committedLines.isNotEmpty;
+
+  /// The real amount this line covers right now — never capped to
+  /// [remaining]: an overpaid line still records the REAL money that
+  /// moved (see PaymentLine's own doc comment), with the excess split
+  /// into a separate change line at submit time — see [_buildPayments].
+  int _activeAmount(int total) => _needsAmountEntry ? (_amountGiven ?? 0) : _remaining(total);
 
   bool _canSubmit(int total) {
     if (_submitting || _method == null) return false;
-    switch (_method!) {
-      case PaymentMethod.cash:
-        return (_cashGiven ?? 0) >= total;
-      case PaymentMethod.card:
-      case PaymentMethod.transfer:
-        return true;
-      case PaymentMethod.customerAccount:
-        return _selectedCustomer != null;
-    }
+    if (_method == PaymentMethod.customerAccount && _selectedCustomer == null) return false;
+    return _activeAmount(total) >= _remaining(total);
   }
 
-  Future<void> _submit() async {
+  /// Whether the CURRENT line, as typed so far, genuinely leaves
+  /// something over for another method to cover — the only case "Add
+  /// another payment method" makes sense; buildSale's own
+  /// kMaxPaymentLines cap is mirrored here too, so the button
+  /// disappears before a tap could ever produce a rejected split.
+  bool _canAddAnotherMethod(int total) {
+    if (_method == null) return false;
+    if (_method == PaymentMethod.customerAccount && _selectedCustomer == null) return false;
+    if (_committedLines.length + 1 >= kMaxPaymentLines) return false;
+    final remaining = _remaining(total);
+    final amount = _activeAmount(total);
+    return amount > 0 && amount < remaining;
+  }
+
+  void _revealAmountEntry() => setState(() => _amountEntryRevealed = true);
+
+  void _addAnotherMethod(int total) {
+    setState(() {
+      _committedLines.add(
+        PaymentLine(
+          method: _method!,
+          amountNaira: _activeAmount(total),
+          customerId: _method == PaymentMethod.customerAccount ? _selectedCustomer?.id : null,
+          customerName: _method == PaymentMethod.customerAccount ? _selectedCustomer?.name : null,
+        ),
+      );
+      _method = null;
+      _amountInput = '';
+      _amountEntryRevealed = false;
+      _selectedCustomer = null;
+      _customerSearch = '';
+      _error = null;
+    });
+  }
+
+  void _removeCommittedLine(int index) => setState(() => _committedLines.removeAt(index));
+
+  /// The full payments list for the sale as it stands right now —
+  /// committed lines, the active line at its real (never-capped) amount,
+  /// and — only when the active line overshoots what's left — a separate
+  /// negative cash line for the change. Mirrors exactly how a pre-split
+  /// cash-with-change sale was already represented, generalized to any
+  /// method: buildSale is the single source of truth for whether this
+  /// list is actually valid, this method's only job is to construct one.
+  List<PaymentLine> _buildPayments(int total) {
+    final remaining = _remaining(total);
+    final amount = _activeAmount(total);
+    final overpay = amount - remaining;
+    return [
+      ..._committedLines,
+      PaymentLine(
+        method: _method!,
+        amountNaira: amount,
+        customerId: _method == PaymentMethod.customerAccount ? _selectedCustomer?.id : null,
+        customerName: _method == PaymentMethod.customerAccount ? _selectedCustomer?.name : null,
+      ),
+      if (overpay > 0) PaymentLine(method: PaymentMethod.cash, amountNaira: -overpay),
+    ];
+  }
+
+  Future<void> _submit(int total) async {
     setState(() {
       _submitting = true;
       _error = null;
@@ -80,11 +168,7 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
     try {
       final sale = await ref
           .read(checkoutControllerProvider)
-          .completeSale(
-            method: _method!,
-            cashGiven: _cashGiven,
-            customer: _selectedCustomer,
-          );
+          .completeSale(payments: _buildPayments(total));
       // Set before calling onSaleComplete: completing the sale clears the
       // cart as a side effect, which can trigger a rebuild of this screen
       // (still mounted, mid-navigation) with an empty cart. Without this
@@ -198,6 +282,7 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
             ),
             const SizedBox(height: AppSpacing.xl),
             _selectedMethodContent(total),
+            ..._splitControls(total),
             if (_error != null) ...[
               const SizedBox(height: AppSpacing.md),
               Text(_error!, style: AppTextStyles.danger(AppTextStyles.bodyMd)),
@@ -206,7 +291,7 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
             AppButton(
               label: 'Complete sale',
               loading: _submitting,
-              onPressed: _canSubmit(total) ? _submit : null,
+              onPressed: _canSubmit(total) ? () => _submit(total) : null,
             ),
           ],
         ),
@@ -227,6 +312,7 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
               child: SingleChildScrollView(
                 child: _PaymentMethodRail(
                   total: total,
+                  remaining: _remaining(total),
                   method: _method,
                   onSelect: (m) => setState(() => _method = m),
                 ),
@@ -250,6 +336,7 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
                       )
                     else
                       _selectedMethodContent(total),
+                    ..._splitControls(total),
                     if (_error != null) ...[
                       const SizedBox(height: AppSpacing.md),
                       Text(
@@ -261,7 +348,7 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
                     AppButton(
                       label: 'Complete sale',
                       loading: _submitting,
-                      onPressed: _canSubmit(total) ? _submit : null,
+                      onPressed: _canSubmit(total) ? () => _submit(total) : null,
                     ),
                   ],
                 ),
@@ -273,45 +360,124 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
     );
   }
 
-  Widget _selectedMethodContent(int total) {
-    if (_method == PaymentMethod.cash) {
-      return _CashSection(
-        total: total,
-        input: _cashInput,
-        onKeyTap: _onCashKey,
-      );
-    }
-    if (_method == PaymentMethod.customerAccount) {
-      return _CustomerAccountSection(
-        total: total,
-        selected: _selectedCustomer,
-        search: _customerSearch,
-        onSearchChanged: (v) => setState(() => _customerSearch = v),
-        onSelect: (c) => setState(() => _selectedCustomer = c),
-        onClear: () => setState(() => _selectedCustomer = null),
-      );
-    }
-    if (_method == PaymentMethod.card || _method == PaymentMethod.transfer) {
-      return AppCard(
-        child: Text(
-          'Confirm to charge ${formatNaira(total)} via ${_method == PaymentMethod.card ? 'card' : 'transfer'}.',
-          style: AppTextStyles.bodyMd,
+  /// The committed-lines summary (if any) plus "Add another payment
+  /// method" — shared between narrow and wide layouts, inserted right
+  /// after the active method's own content in both.
+  List<Widget> _splitControls(int total) {
+    final widgets = <Widget>[];
+    if (_committedLines.isNotEmpty) {
+      widgets.add(const SizedBox(height: AppSpacing.lg));
+      widgets.add(
+        _SplitSummary(
+          lines: _committedLines,
+          remaining: _remaining(total),
+          onRemove: _removeCommittedLine,
         ),
       );
     }
-    return const SizedBox.shrink();
+    if (_canAddAnotherMethod(total)) {
+      widgets.add(const SizedBox(height: AppSpacing.md));
+      widgets.add(
+        OutlinedButton.icon(
+          onPressed: () => _addAnotherMethod(total),
+          icon: const Icon(Icons.add, size: 18),
+          label: const Text('Add another payment method'),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: AppColors.accent,
+            side: const BorderSide(color: AppColors.accent),
+            padding: const EdgeInsets.symmetric(vertical: AppSpacing.md),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(AppSpacing.buttonRadius),
+            ),
+          ),
+        ),
+      );
+    }
+    return widgets;
   }
 
-  void _onCashKey(String key) {
+  Widget _selectedMethodContent(int total) {
+    final remaining = _remaining(total);
+
+    if (_method == PaymentMethod.cash) {
+      return _AmountEntrySection(
+        remaining: remaining,
+        input: _amountInput,
+        onKeyTap: _onAmountKey,
+      );
+    }
+
+    if (_method == PaymentMethod.customerAccount) {
+      if (_selectedCustomer == null) {
+        return _CustomerAccountSection(
+          amount: remaining,
+          selected: null,
+          search: _customerSearch,
+          onSearchChanged: (v) => setState(() => _customerSearch = v),
+          onSelect: (c) => setState(() => _selectedCustomer = c),
+          onClear: () => setState(() => _selectedCustomer = null),
+        );
+      }
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _CustomerAccountSection(
+            amount: _activeAmount(total),
+            selected: _selectedCustomer,
+            search: _customerSearch,
+            onSearchChanged: (v) => setState(() => _customerSearch = v),
+            onSelect: (c) => setState(() => _selectedCustomer = c),
+            onClear: () => setState(() => _selectedCustomer = null),
+          ),
+          if (!_needsAmountEntry) ...[
+            const SizedBox(height: AppSpacing.sm),
+            _RevealSplitLink(onTap: _revealAmountEntry),
+          ],
+          if (_needsAmountEntry) ...[
+            const SizedBox(height: AppSpacing.lg),
+            _AmountEntrySection(
+              remaining: remaining,
+              input: _amountInput,
+              onKeyTap: _onAmountKey,
+            ),
+          ],
+        ],
+      );
+    }
+
+    // card / transfer
+    if (!_needsAmountEntry) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          AppCard(
+            child: Text(
+              'Confirm to charge ${formatNaira(remaining)} via ${_method == PaymentMethod.card ? 'card' : 'transfer'}.',
+              style: AppTextStyles.bodyMd,
+            ),
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          _RevealSplitLink(onTap: _revealAmountEntry),
+        ],
+      );
+    }
+    return _AmountEntrySection(
+      remaining: remaining,
+      input: _amountInput,
+      onKeyTap: _onAmountKey,
+    );
+  }
+
+  void _onAmountKey(String key) {
     setState(() {
       if (key == 'back') {
-        if (_cashInput.isNotEmpty)
-          _cashInput = _cashInput.substring(0, _cashInput.length - 1);
+        if (_amountInput.isNotEmpty)
+          _amountInput = _amountInput.substring(0, _amountInput.length - 1);
         return;
       }
-      if (key == '.') return; // cash is whole naira only
-      if (_cashInput.length >= 9) return;
-      _cashInput += key;
+      if (key == '.') return; // whole naira only
+      if (_amountInput.length >= 9) return;
+      _amountInput += key;
     });
   }
 }
@@ -368,13 +534,18 @@ class _MethodTile extends StatelessWidget {
   }
 }
 
-class _CashSection extends StatelessWidget {
-  final int total;
+/// A live-feedback amount entry — generalizes the old cash-only section
+/// to any method: [remaining] is what THIS line needs to cover (the cart
+/// total on a single-method sale, or whatever's left once other lines
+/// are already committed), so "Change"/"Still need" reads correctly in
+/// both the fast path and mid-split.
+class _AmountEntrySection extends StatelessWidget {
+  final int remaining;
   final String input;
   final ValueChanged<String> onKeyTap;
 
-  const _CashSection({
-    required this.total,
+  const _AmountEntrySection({
+    required this.remaining,
     required this.input,
     required this.onKeyTap,
   });
@@ -382,7 +553,7 @@ class _CashSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final given = input.isEmpty ? 0 : (int.tryParse(input) ?? 0);
-    final delta = given - total;
+    final delta = given - remaining;
     final hasInput = input.isNotEmpty;
 
     return Column(
@@ -394,9 +565,9 @@ class _CashSection extends StatelessWidget {
         const SizedBox(height: AppSpacing.xs),
         Text(
           !hasInput
-              ? 'Enter cash received'
+              ? 'Enter amount received'
               : (delta >= 0
-                    ? 'Change: ${formatNaira(delta)}'
+                    ? (delta == 0 ? 'Balances exactly' : 'Change: ${formatNaira(delta)}')
                     : 'Still need ${formatNaira(-delta)}'),
           style: (delta >= 0 ? AppTextStyles.success : AppTextStyles.danger)(
             AppTextStyles.bodyMd,
@@ -409,8 +580,92 @@ class _CashSection extends StatelessWidget {
   }
 }
 
+/// The lines already committed to this split, each removable — visible
+/// only once staff have actually added a second method.
+class _SplitSummary extends StatelessWidget {
+  final List<PaymentLine> lines;
+  final int remaining;
+  final ValueChanged<int> onRemove;
+
+  const _SplitSummary({
+    required this.lines,
+    required this.remaining,
+    required this.onRemove,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('Already added', style: AppTextStyles.secondary(AppTextStyles.bodySm)),
+          const SizedBox(height: AppSpacing.sm),
+          for (var i = 0; i < lines.length; i++)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 2),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(_lineLabel(lines[i]), style: AppTextStyles.bodyMd),
+                  ),
+                  Text(formatNaira(lines[i].amountNaira), style: AppTextStyles.numericSm),
+                  IconButton(
+                    onPressed: () => onRemove(i),
+                    icon: const Icon(Icons.close, size: 18),
+                    color: AppColors.textSecondary,
+                    tooltip: 'Remove',
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                  ),
+                ],
+              ),
+            ),
+          const SizedBox(height: AppSpacing.xs),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('Remaining', style: AppTextStyles.labelMd),
+              Text(formatNaira(remaining), style: AppTextStyles.numericSm.copyWith(color: AppColors.accent)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _lineLabel(PaymentLine line) {
+    final base = switch (line.method) {
+      PaymentMethod.cash => 'Cash',
+      PaymentMethod.card => 'Card',
+      PaymentMethod.transfer => 'Transfer',
+      PaymentMethod.customerAccount => line.customerName ?? 'Customer Account',
+    };
+    return line.method == PaymentMethod.customerAccount ? '$base (account)' : base;
+  }
+}
+
+class _RevealSplitLink extends StatelessWidget {
+  final VoidCallback onTap;
+
+  const _RevealSplitLink({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: TextButton(
+        onPressed: onTap,
+        child: Text(
+          'Split — pay only part with this method',
+          style: AppTextStyles.accent(AppTextStyles.bodySm),
+        ),
+      ),
+    );
+  }
+}
+
 class _CustomerAccountSection extends ConsumerWidget {
-  final int total;
+  final int amount;
   final Customer? selected;
   final String search;
   final ValueChanged<String> onSearchChanged;
@@ -418,7 +673,7 @@ class _CustomerAccountSection extends ConsumerWidget {
   final VoidCallback onClear;
 
   const _CustomerAccountSection({
-    required this.total,
+    required this.amount,
     required this.selected,
     required this.search,
     required this.onSearchChanged,
@@ -429,7 +684,7 @@ class _CustomerAccountSection extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     if (selected != null) {
-      final newBalance = selected!.balance + total;
+      final newBalance = selected!.balance + amount;
       return AppCard(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -605,14 +860,17 @@ class _CustomerRow extends StatelessWidget {
 
 /// The wide-mode rail: the running total, then the 4 supported methods —
 /// exactly [PaymentMethod]'s values, nothing more — as a vertical list
-/// instead of narrow's 2x2 grid of [_MethodTile]s.
+/// instead of narrow's 2x2 grid of [_MethodTile]s. Shows "Remaining" too,
+/// once a split is under way — [remaining] equals [total] until then.
 class _PaymentMethodRail extends StatelessWidget {
   final int total;
+  final int remaining;
   final PaymentMethod? method;
   final ValueChanged<PaymentMethod> onSelect;
 
   const _PaymentMethodRail({
     required this.total,
+    required this.remaining,
     required this.method,
     required this.onSelect,
   });
@@ -625,6 +883,13 @@ class _PaymentMethodRail extends StatelessWidget {
         Text('Total', style: AppTextStyles.secondary(AppTextStyles.bodyMd)),
         const SizedBox(height: AppSpacing.xs),
         Text(formatNaira(total), style: AppTextStyles.numericXl),
+        if (remaining != total) ...[
+          const SizedBox(height: AppSpacing.sm),
+          Text(
+            'Remaining: ${formatNaira(remaining)}',
+            style: AppTextStyles.accent(AppTextStyles.bodyMd),
+          ),
+        ],
         const SizedBox(height: AppSpacing.xl),
         _MethodRow(
           icon: Icons.payments_outlined,
