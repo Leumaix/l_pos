@@ -102,6 +102,20 @@ class FirebaseAuthRepository implements AuthRepository {
     final cached = _appCache[appName];
     if (cached != null) return cached;
     try {
+      // Deliberately NOT emulator-configured here, unlike the freshly-
+      // created branch below — this branch means the native FirebaseApp
+      // already existed (survived a Flutter hot restart, which resets
+      // the Dart VM but not the native Android process; _appCache above
+      // is a plain Dart Map and doesn't survive that reset either). Since
+      // useFirestoreEmulator/useAuthEmulator throw once any read/write
+      // has touched the instance, and there's no way to ask "has this
+      // app been used yet" from here, calling them unconditionally would
+      // risk crashing an instance that was already live before the
+      // restart. Not exercised by this project's own test workflow (a
+      // full `flutter run` kills the whole process, so this branch is
+      // never hit with an unconfigured app) — a real gap only for
+      // interactive hot-restart dev cycles, left as a known limitation
+      // rather than solved here.
       final existing = Firebase.app(appName);
       _appCache[appName] = existing;
       return existing;
@@ -110,6 +124,27 @@ class FirebaseAuthRepository implements AuthRepository {
         name: appName,
         options: DefaultFirebaseOptions.currentPlatform,
       );
+      // Every staff member's real sign-in flow (send-link, complete-link,
+      // set-PIN, PIN sign-in, _loadStaffDoc) runs through THIS secondary
+      // app, never the default one — main.dart's kDebugMode branch only
+      // ever configures the default app's instances, so without this,
+      // every one of those calls silently targets real production
+      // lpos-ac40b. Confirmed live on a real device: Auth still happened
+      // to reach the local emulator without this (an apparent SDK quirk
+      // where emulator mode is sticky process-wide for Auth specifically
+      // — not something to rely on, hence setting it explicitly here
+      // too), but Firestore did not, and a production Firestore read
+      // using an ID token signed by the LOCAL emulator's fake key just
+      // reads as unauthenticated — surfacing as a flat permission-denied
+      // with no hint it was ever talking to the wrong project.
+      if (kDebugMode) {
+        FirebaseFirestore.instanceFor(
+          app: created,
+        ).useFirestoreEmulator('localhost', 8090, automaticHostMapping: false);
+        await fb_auth.FirebaseAuth.instanceFor(
+          app: created,
+        ).useAuthEmulator('localhost', 9099, automaticHostMapping: false);
+      }
       _appCache[appName] = created;
       return created;
     }

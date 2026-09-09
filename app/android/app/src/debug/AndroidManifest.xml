@@ -4,4 +4,13 @@
          to allow setting breakpoints, to provide hot reload, etc.
     -->
     <uses-permission android:name="android.permission.INTERNET"/>
+
+    <!-- Debug builds only (this manifest lives under src/debug, merged only
+         into debug variants — release is untouched). main.dart's kDebugMode
+         branch talks to the local Firestore/Auth emulators over plain
+         http://localhost, but Android blocks all cleartext traffic by
+         default since API 28. Confirmed live on a real device: without
+         this, sendSignInLinkToEmail failed with "Cleartext HTTP traffic to
+         localhost not permitted" before ever reaching the emulator. -->
+    <application android:usesCleartextTraffic="true"/>
 </manifest>

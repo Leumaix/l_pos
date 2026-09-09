@@ -22,9 +22,26 @@ void main() async {
   // points straight at it, exactly as before. On a physical device this
   // needs the local emulator ports reachable at localhost, e.g. via
   // `adb reverse tcp:8090 tcp:8090` and `adb reverse tcp:9099 tcp:9099`.
+  //
+  // automaticHostMapping: false — both plugins otherwise unconditionally
+  // rewrite 'localhost' to '10.0.2.2' on ANY Android target (see
+  // cloud_firestore's firestore.dart / firebase_auth's firebase_auth.dart),
+  // which is only correct for an Android Virtual Device. On a real phone,
+  // 10.0.2.2 isn't the host machine — it silently breaks the adb reverse
+  // tunnels above, which forward the device's own literal localhost, not
+  // 10.0.2.2. Confirmed live on a real device (TECNO KI5q): without this
+  // flag the app was quietly trying to reach 10.0.2.2, never the tunnel.
   if (kDebugMode) {
-    FirebaseFirestore.instance.useFirestoreEmulator('localhost', 8090);
-    await FirebaseAuth.instance.useAuthEmulator('localhost', 9099);
+    FirebaseFirestore.instance.useFirestoreEmulator(
+      'localhost',
+      8090,
+      automaticHostMapping: false,
+    );
+    await FirebaseAuth.instance.useAuthEmulator(
+      'localhost',
+      9099,
+      automaticHostMapping: false,
+    );
   }
 
   // Phone stays portrait-primary, but the shop's counter-mounted tablet
