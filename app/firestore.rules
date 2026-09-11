@@ -659,6 +659,91 @@ service cloud.firestore {
         allow update, delete: if false;
       }
 
+      match /giftApprovals/{giftId} {
+        // Never read back by anyone — same posture as
+        // platformConfig/superAdmins. The gifts/{giftId} create rule
+        // below uses exists()/get(), and this doc's own delete rule
+        // uses getAfter() — both exempt from this doc's own allow read,
+        // exactly like isActiveStaffOf already relies on for staff/{uid}.
+        allow read: if false;
+
+        // Written ONLY by the owner's own authenticated session —
+        // proven by AuthRepository.verifyActiveOwnerPin succeeding for
+        // that email BEFORE this write happens (GiftController never
+        // calls this otherwise), so request.auth.uid really is the
+        // owner's own uid here, not merely a client-side PIN check that
+        // was verified and then discarded. The id is the SAME id the
+        // eventual gifts/{giftId} doc will use — minted once, up front,
+        // by GiftController — which is what lets the delete rule below
+        // pair itself with that exact gift via getAfter(), no separate
+        // "consumed" field needed.
+        allow create: if isActiveOwnerOf(businessId)
+          && request.auth.uid == request.resource.data.approvedByOwnerUid
+          && request.resource.data.keys().hasOnly(['approvedByOwnerUid', 'createdAt']);
+
+        // "Consumed" by the SAME transaction that creates the paired
+        // gift — proven by getAfter() on the identical id, the same
+        // pairing shape shiftState/current's own delete rule already
+        // uses to pair itself with a shiftHistory archive record
+        // (existence-as-state, no separate boolean). The 10-minute
+        // window keeps a stale, never-consumed approval from lingering
+        // forever as a footgun — a short-lived token for a
+        // right-there-right-now approval, not a standing grant.
+        allow delete: if isActiveStaffOf(businessId)
+          && getAfter(/databases/$(database)/documents/businesses/$(businessId)/gifts/$(giftId)).data.approvedByOwnerUid
+             == resource.data.approvedByOwnerUid
+          && request.time < resource.data.createdAt + duration.value(10, 'm');
+
+        allow update: if false;
+      }
+
+      match /gifts/{giftId} {
+        // Owner-read-only — revenue-adjacent detail, same boundary as
+        // /sales and /expenses. No running "gifted" total needs to be
+        // staff-readable the way shiftState's totals are — gifting never
+        // touches till cash, so there's no staff-facing number that
+        // needs this detail behind it (unlike expenseTotalNaira).
+        allow read: if isActiveOwnerOf(businessId) || isPlatformSuperAdmin();
+
+        // Append-only, staff-attributed, same discipline as /sales and
+        // /expenses. shiftId is REQUIRED unconditionally (unlike an
+        // expense, where only a cash one needs a shift) — gifting
+        // removes real stock the same way a sale does. The threshold
+        // itself (gas > 2kg, product value > ₦2000) is RE-DERIVED here,
+        // never trusted from requiresApproval alone — a client that
+        // always sent requiresApproval: false would otherwise skip
+        // owner approval no matter how large the gift. The product
+        // value cross-check (estimatedValueNaira == price * quantity)
+        // closes the matching hole on the other side: claiming a fake
+        // low value to dodge the threshold.
+        allow create: if isActiveStaffOf(businessId)
+          && request.auth.uid == request.resource.data.staffId
+          && request.resource.data.reason is string && request.resource.data.reason.size() > 0
+          && request.resource.data.itemType in ['gas', 'product']
+          && request.resource.data.quantity is number && request.resource.data.quantity > 0
+          && (request.resource.data.itemType != 'product' || request.resource.data.productId is string)
+          && request.resource.data.shiftId is string
+          && exists(/databases/$(database)/documents/businesses/$(businessId)/shiftState/current)
+          && request.resource.data.shiftId ==
+             get(/databases/$(database)/documents/businesses/$(businessId)/shiftState/current).data.plannedHistoryId
+          && (request.resource.data.itemType != 'product' ||
+              request.resource.data.estimatedValueNaira ==
+                get(/databases/$(database)/documents/businesses/$(businessId)/products/$(request.resource.data.productId)).data.price
+                * request.resource.data.quantity)
+          && (
+               (request.resource.data.itemType == 'gas' && request.resource.data.quantity <= 2)
+               || (request.resource.data.itemType == 'product' && request.resource.data.estimatedValueNaira <= 2000)
+               || (
+                    request.resource.data.requiresApproval == true
+                    && request.resource.data.approvedByOwnerUid is string
+                    && exists(/databases/$(database)/documents/businesses/$(businessId)/giftApprovals/$(giftId))
+                    && get(/databases/$(database)/documents/businesses/$(businessId)/giftApprovals/$(giftId)).data.approvedByOwnerUid
+                       == request.resource.data.approvedByOwnerUid
+                  )
+             );
+        allow update, delete: if false;
+      }
+
       match /shiftState/{docId} {
         // A business day's cash-drawer tracking, scoped to the whole
         // business (not per staff member) — opened once, closed once,
