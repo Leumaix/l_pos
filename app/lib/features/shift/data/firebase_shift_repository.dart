@@ -68,6 +68,8 @@ class FirebaseShiftRepository implements ShiftRepository {
       transferTotalNaira: (data['transferTotalNaira'] as num).toInt(),
       creditTotalNaira: (data['creditTotalNaira'] as num).toInt(),
       salesCount: (data['salesCount'] as num).toInt(),
+      expenseTotalNaira: (data['expenseTotalNaira'] as num).toInt(),
+      plannedHistoryId: data['plannedHistoryId'] as String,
     );
   }
 
@@ -83,6 +85,8 @@ class FirebaseShiftRepository implements ShiftRepository {
       transferTotalNaira: (data['transferTotalNaira'] as num).toInt(),
       creditTotalNaira: (data['creditTotalNaira'] as num).toInt(),
       salesCount: (data['salesCount'] as num).toInt(),
+      expenseTotalNaira: (data['expenseTotalNaira'] as num).toInt(),
+      plannedHistoryId: doc.id,
       countedCashNaira: (data['countedCashNaira'] as num).toInt(),
       varianceNaira: (data['varianceNaira'] as num).toInt(),
       closedByStaffId: data['closedByStaffId'] as String,
@@ -150,6 +154,7 @@ class FirebaseShiftRepository implements ShiftRepository {
         'transferTotalNaira': 0,
         'creditTotalNaira': 0,
         'salesCount': 0,
+        'expenseTotalNaira': 0,
         'plannedHistoryId': historyRef.id,
       });
     } on FirebaseException catch (e) {
@@ -193,6 +198,7 @@ class FirebaseShiftRepository implements ShiftRepository {
         'transferTotalNaira': closed.transferTotalNaira,
         'creditTotalNaira': closed.creditTotalNaira,
         'salesCount': closed.salesCount,
+        'expenseTotalNaira': closed.expenseTotalNaira,
         'countedCashNaira': closed.countedCashNaira,
         'expectedCashNaira': closed.expectedCashNaira,
         'varianceNaira': closed.varianceNaira,

@@ -69,6 +69,7 @@ class FakeShiftRepository implements ShiftRepository {
   final _controller = StreamController<OpenShift?>.broadcast();
   final List<ClosedShift> _history = [];
   final _historyController = StreamController<List<ClosedShift>>.broadcast();
+  int _historyIdCounter = 0;
 
   FakeShiftRepository({bool openShift = true})
     : _current = openShift
@@ -82,6 +83,8 @@ class FakeShiftRepository implements ShiftRepository {
               transferTotalNaira: 0,
               creditTotalNaira: 0,
               salesCount: 0,
+              expenseTotalNaira: 0,
+              plannedHistoryId: 'hist-fake-seed',
             )
           : null;
 
@@ -113,6 +116,8 @@ class FakeShiftRepository implements ShiftRepository {
       transferTotalNaira: 0,
       creditTotalNaira: 0,
       salesCount: 0,
+      expenseTotalNaira: 0,
+      plannedHistoryId: 'hist-fake-${_historyIdCounter++}',
     );
     _controller.add(_current);
   }
@@ -169,6 +174,33 @@ class FakeShiftRepository implements ShiftRepository {
       transferTotalNaira: shift.transferTotalNaira + (method == PaymentMethod.transfer ? amountNaira : 0),
       creditTotalNaira: shift.creditTotalNaira + (method == PaymentMethod.customerAccount ? amountNaira : 0),
       salesCount: shift.salesCount + 1,
+      expenseTotalNaira: shift.expenseTotalNaira,
+      plannedHistoryId: shift.plannedHistoryId,
+    );
+    _controller.add(_current);
+  }
+
+  /// Test-only: applies a cash expense's total the same way the real
+  /// FirebaseExpenseRepository.commitExpense transaction would, without
+  /// going through a full FakeExpenseRepository wiring — same shape as
+  /// [debugApplySaleTotals] above. Throws [NoShiftOpenException] if
+  /// nothing is open. Only ever called for a cash expense; transfer/other
+  /// expenses never touch shift totals at all.
+  void debugApplyExpenseTotal({required int amountNaira}) {
+    final shift = _current;
+    if (shift == null) throw const NoShiftOpenException();
+    _current = OpenShift(
+      openingFloatNaira: shift.openingFloatNaira,
+      openedByStaffId: shift.openedByStaffId,
+      openedByStaffName: shift.openedByStaffName,
+      openedAt: shift.openedAt,
+      cashTotalNaira: shift.cashTotalNaira,
+      cardTotalNaira: shift.cardTotalNaira,
+      transferTotalNaira: shift.transferTotalNaira,
+      creditTotalNaira: shift.creditTotalNaira,
+      salesCount: shift.salesCount,
+      expenseTotalNaira: shift.expenseTotalNaira + amountNaira,
+      plannedHistoryId: shift.plannedHistoryId,
     );
     _controller.add(_current);
   }

@@ -9,6 +9,7 @@ void main() {
     int transferTotalNaira = 0,
     int creditTotalNaira = 0,
     int salesCount = 0,
+    int expenseTotalNaira = 0,
   }) {
     return OpenShift(
       openingFloatNaira: openingFloatNaira,
@@ -20,6 +21,8 @@ void main() {
       transferTotalNaira: transferTotalNaira,
       creditTotalNaira: creditTotalNaira,
       salesCount: salesCount,
+      expenseTotalNaira: expenseTotalNaira,
+      plannedHistoryId: 'hist-test-1',
     );
   }
 
@@ -41,6 +44,16 @@ void main() {
         creditTotalNaira: 999999,
       );
       expect(s.expectedCashNaira, 15000);
+    });
+
+    test('cash expenses subtract from expected cash — real money left the drawer', () {
+      final s = shift(openingFloatNaira: 5000, cashTotalNaira: 32000, expenseTotalNaira: 4500);
+      expect(s.expectedCashNaira, 32500); // 5000 + 32000 - 4500
+    });
+
+    test('a fully offset shift (expenses equal cash taken in) still reconciles to just the float', () {
+      final s = shift(openingFloatNaira: 5000, cashTotalNaira: 32000, expenseTotalNaira: 32000);
+      expect(s.expectedCashNaira, 5000);
     });
   });
 
@@ -99,6 +112,7 @@ void main() {
           transferTotalNaira: 12000,
           creditTotalNaira: 4000,
           salesCount: 9,
+          expenseTotalNaira: 1500,
         ),
         countedCashNaira: 35000,
         staffId: 'staff-2',
@@ -109,6 +123,8 @@ void main() {
       expect(result.transferTotalNaira, 12000);
       expect(result.creditTotalNaira, 4000);
       expect(result.salesCount, 9);
+      expect(result.expenseTotalNaira, 1500);
+      expect(result.plannedHistoryId, 'hist-test-1');
       expect(result.openedByStaffId, 'staff-1');
       expect(result.closedByStaffId, 'staff-2');
     });

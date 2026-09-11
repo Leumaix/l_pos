@@ -99,6 +99,8 @@ void main() {
           'transferTotalNaira': 200,
           'creditTotalNaira': 0,
           'salesCount': 3,
+          'expenseTotalNaira': 0,
+          'plannedHistoryId': 'hist-1',
         });
         final result = await repository.fetchCurrentShift();
         expect(result, isNotNull);
