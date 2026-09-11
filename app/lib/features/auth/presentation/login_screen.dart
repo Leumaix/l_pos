@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_text_styles.dart';
 import '../../../core/widgets/app_button.dart';
@@ -114,18 +113,10 @@ class _LogoBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 72,
-      height: 72,
-      decoration: const BoxDecoration(
-        gradient: AppColors.accentGradient,
-        shape: BoxShape.circle,
-      ),
-      child: const Icon(
-        Icons.local_fire_department,
-        color: AppColors.onAccent,
-        size: 36,
-      ),
-    );
+    // The real logo already carries its own color/shape identity (see
+    // assets/icon/logo.png) — stacking it on the accent-gradient circle
+    // this badge used to have (back when it was just a placeholder fire
+    // icon) looked busy/competing, so it's shown on its own here.
+    return Image.asset('assets/icon/logo.png', width: 72, height: 72, fit: BoxFit.contain);
   }
 }
