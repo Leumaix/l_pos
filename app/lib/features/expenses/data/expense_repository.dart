@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../../../core/business_config.dart';
+import '../../../core/utils/replay_stream.dart';
 import '../../auth/data/auth_repository.dart';
 import '../../shift/data/shift_repository.dart';
 import '../domain/expense.dart';
@@ -28,6 +31,12 @@ abstract class ExpenseRepository {
   /// same guard; firestore.rules independently enforces the same
   /// boundary server-side.
   Future<void> commitExpense({required Expense expense});
+
+  /// Owner-only at the rules level — Reports' running expense total and
+  /// net-figure. Same shape as SalesRepository.watchSales(), a separate
+  /// concern from the totals already on shiftState/current (which cover
+  /// cash expenses only; this covers every expense, any method).
+  Stream<List<Expense>> watchExpenses();
 }
 
 /// In-memory stand-in. Takes a concrete FakeShiftRepository (not the
@@ -38,6 +47,7 @@ abstract class ExpenseRepository {
 class FakeExpenseRepository implements ExpenseRepository {
   final FakeShiftRepository _shift;
   final List<Expense> _expenses = [];
+  final _controller = StreamController<List<Expense>>.broadcast();
 
   FakeExpenseRepository({required this._shift});
 
@@ -54,7 +64,12 @@ class FakeExpenseRepository implements ExpenseRepository {
       _shift.debugApplyExpenseTotal(amountNaira: expense.amountNaira);
     }
     _expenses.add(expense);
+    _controller.add(List.unmodifiable(_expenses));
   }
+
+  @override
+  Stream<List<Expense>> watchExpenses() =>
+      replayLatest(() => List.unmodifiable(_expenses), _controller.stream);
 
   /// Test-only visibility into what's been recorded so far.
   List<Expense> get debugExpenses => List.unmodifiable(_expenses);
@@ -109,6 +124,22 @@ class FirebaseExpenseRepository implements ExpenseRepository {
     });
   }
 
+  @override
+  Stream<List<Expense>> watchExpenses() {
+    return _expensesCollection.orderBy('createdAt', descending: true).snapshots().map(
+      (snapshot) => snapshot.docs
+          // createdAt is FieldValue.serverTimestamp() — a brand-new
+          // expense's local, pre-confirmation snapshot briefly has it as
+          // null. Skip it for this emission rather than crash the whole
+          // stream on the cast below; the next snapshot, once the server
+          // assigns the real timestamp, includes it normally. Same
+          // reasoning as FirebaseShiftRepository's own openedAt guard.
+          .where((doc) => doc.data()['createdAt'] is Timestamp)
+          .map(_expenseFromDoc)
+          .toList(),
+    );
+  }
+
   static Map<String, dynamic> _expenseToDoc(Expense expense) => {
     'amountNaira': expense.amountNaira,
     'paymentMethod': expense.method.name,
@@ -119,4 +150,19 @@ class FirebaseExpenseRepository implements ExpenseRepository {
     'shiftId': expense.shiftId,
     'createdAt': FieldValue.serverTimestamp(),
   };
+
+  static Expense _expenseFromDoc(QueryDocumentSnapshot<Map<String, dynamic>> doc) {
+    final data = doc.data();
+    return Expense(
+      id: doc.id,
+      amountNaira: (data['amountNaira'] as num).toInt(),
+      method: ExpensePaymentMethod.values.byName(data['paymentMethod'] as String),
+      category: ExpenseCategory.values.byName(data['category'] as String),
+      note: data['note'] as String?,
+      staffId: data['staffId'] as String,
+      staffName: data['staffName'] as String,
+      shiftId: data['shiftId'] as String?,
+      createdAt: (data['createdAt'] as Timestamp).toDate(),
+    );
+  }
 }

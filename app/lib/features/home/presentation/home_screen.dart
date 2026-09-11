@@ -21,6 +21,13 @@ import '../application/dashboard_providers.dart';
 class HomeScreen extends ConsumerWidget {
   final VoidCallback onSell;
   final VoidCallback onCustomers;
+
+  /// Null omits the "Record expense" quick action entirely — the mobile
+  /// router passes a real callback; the web/PWA router doesn't yet (that
+  /// feature is mobile-only for now), same optional-tile shape as
+  /// isOwner already gates Stock/Reports with below.
+  final VoidCallback? onRecordExpense;
+
   final VoidCallback onStock;
   final VoidCallback onReports;
 
@@ -36,6 +43,7 @@ class HomeScreen extends ConsumerWidget {
     super.key,
     required this.onSell,
     required this.onCustomers,
+    this.onRecordExpense,
     required this.onStock,
     required this.onReports,
     this.showStaffHandoffOption = true,
@@ -91,6 +99,7 @@ class HomeScreen extends ConsumerWidget {
                     amountOwedNaira: data.amountOwedByCustomersNaira,
                     onSell: onSell,
                     onCustomers: onCustomers,
+                    onRecordExpense: onRecordExpense,
                     onStock: onStock,
                     onReports: onReports,
                   ),
@@ -312,6 +321,7 @@ class _DashboardBody extends StatelessWidget {
   final int amountOwedNaira;
   final VoidCallback onSell;
   final VoidCallback onCustomers;
+  final VoidCallback? onRecordExpense;
   final VoidCallback onStock;
   final VoidCallback onReports;
 
@@ -322,6 +332,7 @@ class _DashboardBody extends StatelessWidget {
     required this.amountOwedNaira,
     required this.onSell,
     required this.onCustomers,
+    this.onRecordExpense,
     required this.onStock,
     required this.onReports,
   });
@@ -399,6 +410,20 @@ class _DashboardBody extends StatelessWidget {
               label: 'Customers',
               onTap: onCustomers,
             ),
+            // Any active staff member — not owner-only, same as Sell/
+            // Customers above. Individual expense records are owner-
+            // read-only at the rules level (see firestore.rules), but
+            // recording one isn't — matches how selling is open to
+            // everyone even though /sales itself is owner-read-only too.
+            // Null on web (mobile-only for now, see onRecordExpense's own
+            // doc comment) — omitted entirely there, same optional-tile
+            // shape as isOwner gates Stock/Reports below.
+            if (onRecordExpense != null)
+              _QuickAction(
+                icon: Icons.receipt_long_outlined,
+                label: 'Record expense',
+                onTap: onRecordExpense!,
+              ),
             // Stock and Reports expose business-wide inventory value and
             // sales history — owner-only, same boundary as the account
             // menu's Manage Catalog/Settings. Enforced for real by the

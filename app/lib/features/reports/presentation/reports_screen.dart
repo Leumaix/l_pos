@@ -14,6 +14,8 @@ import '../../../core/widgets/stat_card.dart';
 import '../../business/application/business_providers.dart';
 import '../../customers/application/customer_providers.dart';
 import '../../customers/domain/customer_totals.dart';
+import '../../expenses/application/expense_providers.dart';
+import '../../expenses/domain/expenses_report.dart';
 import '../../sell/application/inventory_providers.dart';
 import '../../sell/application/sales_providers.dart';
 import '../../shift/application/shift_providers.dart';
@@ -136,6 +138,8 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
                     style: AppTextStyles.danger(AppTextStyles.bodyMd),
                   ),
                 ),
+                const SizedBox(height: AppSpacing.lg),
+                _ExpensesAndNetSection(range: _range),
                 const SizedBox(height: AppSpacing.xl),
                 Text('Stock snapshot', style: AppTextStyles.headingSm),
                 const SizedBox(height: AppSpacing.md),
@@ -261,6 +265,7 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
   /// arranged differently.
   Widget _buildDesktopDashboard() {
     final salesAsync = ref.watch(salesProvider);
+    final expensesAsync = ref.watch(expensesProvider);
     final gasStockAsync = ref.watch(gasStockProvider);
     final rate = ref.watch(gasRateProvider);
     final productsAsync = ref.watch(productsProvider);
@@ -280,6 +285,13 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
     final report = sales == null
         ? null
         : buildSalesReport(sales, range: _range, now: DateTime.now());
+    final expenses = expensesAsync.valueOrNull;
+    final expensesReport = expenses == null
+        ? null
+        : buildExpensesReport(expenses, range: _range, now: DateTime.now());
+    final netForRange = (report == null || expensesReport == null)
+        ? null
+        : report.totalForRange - expensesReport.totalForRange;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -292,6 +304,21 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
                 child: StatCard(
                   label: salesLabel,
                   value: report == null ? '—' : formatNaira(report.totalForRange),
+                ),
+              ),
+              const SizedBox(width: AppSpacing.md),
+              Expanded(
+                child: StatCard(
+                  label: 'Expenses',
+                  value: expensesReport == null ? '—' : formatNaira(expensesReport.totalForRange),
+                ),
+              ),
+              const SizedBox(width: AppSpacing.md),
+              Expanded(
+                child: StatCard(
+                  label: 'Net',
+                  value: netForRange == null ? '—' : formatNaira(netForRange),
+                  valueColor: netForRange != null && netForRange < 0 ? AppColors.danger : null,
                 ),
               ),
               const SizedBox(width: AppSpacing.md),
@@ -427,6 +454,51 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
   }
 }
 
+/// Additive alongside the existing sales card above — expenses total for
+/// the same [range], plus a net (revenue − expenses) figure. Composes
+/// two independent AsyncValues via .valueOrNull, same pattern the
+/// desktop dashboard already uses for its own stat-tile row, rather than
+/// nesting one .when() inside another.
+class _ExpensesAndNetSection extends ConsumerWidget {
+  final ReportRange range;
+
+  const _ExpensesAndNetSection({required this.range});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final salesAsync = ref.watch(salesProvider);
+    final expensesAsync = ref.watch(expensesProvider);
+    final sales = salesAsync.valueOrNull;
+    final expenses = expensesAsync.valueOrNull;
+
+    final salesReport = sales == null ? null : buildSalesReport(sales, range: range, now: DateTime.now());
+    final expensesReport =
+        expenses == null ? null : buildExpensesReport(expenses, range: range, now: DateTime.now());
+    final netForRange = (salesReport == null || expensesReport == null)
+        ? null
+        : salesReport.totalForRange - expensesReport.totalForRange;
+
+    return Row(
+      children: [
+        Expanded(
+          child: StatCard(
+            label: 'Expenses',
+            value: expensesReport == null ? '—' : formatNaira(expensesReport.totalForRange),
+          ),
+        ),
+        const SizedBox(width: AppSpacing.md),
+        Expanded(
+          child: StatCard(
+            label: 'Net',
+            value: netForRange == null ? '—' : formatNaira(netForRange),
+            valueColor: netForRange != null && netForRange < 0 ? AppColors.danger : null,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _ShiftHistoryCard extends StatelessWidget {
   final ClosedShift shift;
 
@@ -466,6 +538,7 @@ class _ShiftHistoryCard extends StatelessWidget {
           const SizedBox(height: AppSpacing.sm),
           _BreakdownRow(label: 'Opening float', value: shift.openingFloatNaira),
           _BreakdownRow(label: 'Cash sales', value: shift.cashTotalNaira),
+          _BreakdownRow(label: 'Cash expenses', value: shift.expenseTotalNaira),
           _BreakdownRow(label: 'Card sales', value: shift.cardTotalNaira),
           _BreakdownRow(label: 'Transfer sales', value: shift.transferTotalNaira),
           _BreakdownRow(label: 'Customer account sales', value: shift.creditTotalNaira),
