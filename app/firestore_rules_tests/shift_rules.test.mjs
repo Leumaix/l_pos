@@ -91,6 +91,7 @@ const OPEN_SHIFT_BASE = {
   transferTotalNaira: 0,
   creditTotalNaira: 0,
   salesCount: 4,
+  expenseTotalNaira: 0,
   plannedHistoryId: 'hist-1',
 };
 
