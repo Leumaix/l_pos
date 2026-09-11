@@ -136,6 +136,27 @@ class FakeAuthRepository implements AuthRepository {
   }
 
   @override
+  Future<String> verifyActiveOwnerPin({required String email, required String pin}) async {
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    final seed = _seeded[email.trim().toLowerCase()];
+    if (seed == null || seed.pin != pin) {
+      throw const InvalidCredentialsException();
+    }
+    if (seed.user.role != 'owner') {
+      throw const NotAnActiveOwnerException();
+    }
+    // Deliberately no _currentUser/_controller touch — see this method's
+    // own doc comment on AuthRepository.
+    return seed.user.uid;
+  }
+
+  /// This fake never touches real Firestore (see activeFirestore's own
+  /// doc comment) — always null. GiftRepository's own fake records an
+  /// approval purely in-memory instead of depending on this.
+  @override
+  FirebaseFirestore? firestoreForEmail(String email) => null;
+
+  @override
   Future<void> signOut() async {
     _currentUser = null;
     _controller.add(null);

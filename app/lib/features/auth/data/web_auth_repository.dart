@@ -139,6 +139,20 @@ class WebAuthRepository implements AuthRepository {
   }
 
   @override
+  Future<String> verifyActiveOwnerPin({required String email, required String pin}) {
+    throw UnsupportedError(
+      'WebAuthRepository has no PIN concept, and the gifting feature this exists for is mobile-only for now.',
+    );
+  }
+
+  @override
+  FirebaseFirestore? firestoreForEmail(String email) {
+    throw UnsupportedError(
+      'WebAuthRepository has no per-staff secondary-app sessions — there is only ever one signed-in user.',
+    );
+  }
+
+  @override
   Future<SetPinResult> setPinForVerifiedDevice({
     required String email,
     required String pin,

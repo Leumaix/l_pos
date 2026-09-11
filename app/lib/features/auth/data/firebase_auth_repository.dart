@@ -347,6 +347,67 @@ class FirebaseAuthRepository implements AuthRepository {
     return appUser;
   }
 
+  @override
+  Future<String> verifyActiveOwnerPin({required String email, required String pin}) async {
+    final normalizedEmail = email.trim().toLowerCase();
+    final credential = await _store.get(normalizedEmail);
+    if (credential == null) {
+      throw const InvalidCredentialsException();
+    }
+
+    final now = DateTime.now();
+    if (isLockedOut(credential.lockout, now)) {
+      throw PinLockedException(credential.lockout.lockedUntil!);
+    }
+
+    final matches = await verifyPin(pin, credential.pinHash);
+    if (!matches) {
+      final result = recordFailedPinAttempt(credential.lockout, now);
+      if (result.outcome == PinAttemptOutcome.credentialWiped) {
+        await _store.delete(normalizedEmail);
+        throw const DeviceVerificationRequiredException();
+      }
+      await _store.save(credential.copyWith(lockout: result.newState));
+      if (result.outcome == PinAttemptOutcome.temporarilyLocked) {
+        throw PinLockedException(result.newState.lockedUntil!);
+      }
+      throw const InvalidCredentialsException();
+    }
+
+    // Correct PIN — same lockout reset as signInWithEmailAndPin, but
+    // deliberately NOT _currentUser = ...  / _controller.add(...): this
+    // whole method exists specifically so the caller's active session
+    // is untouched regardless of outcome.
+    await _store.save(credential.copyWith(lockout: resetLockoutState));
+
+    final app = await _appFor(credential.appName);
+    final auth = fb_auth.FirebaseAuth.instanceFor(app: app);
+    final fbUser = auth.currentUser;
+    if (fbUser == null) {
+      await _store.delete(normalizedEmail);
+      throw const DeviceVerificationRequiredException();
+    }
+
+    // A direct, minimal read — NOT _loadStaffDoc, which also runs
+    // self-service invite-provisioning side effects that make no sense
+    // here: this is checking an ALREADY-established staff member's
+    // CURRENT role, not onboarding a new one.
+    final firestore = FirebaseFirestore.instanceFor(app: app);
+    final doc = await firestore.doc('businesses/$kBusinessId/staff/${fbUser.uid}').get();
+    final data = doc.data();
+    if (!doc.exists || data == null || data['active'] != true || data['role'] != 'owner') {
+      throw const NotAnActiveOwnerException();
+    }
+    return fbUser.uid;
+  }
+
+  @override
+  FirebaseFirestore? firestoreForEmail(String email) {
+    final app = _appCache[_appNameFor(email.trim().toLowerCase())];
+    if (app == null) return null;
+    return FirebaseFirestore.instanceFor(app: app);
+  }
+
   Future<AppUser> _loadStaffDoc({
     required FirebaseApp app,
     required String uid,

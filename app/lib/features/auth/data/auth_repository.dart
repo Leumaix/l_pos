@@ -56,6 +56,16 @@ class StaffRecordNotFoundException implements Exception {
   const StaffRecordNotFoundException();
 }
 
+/// Thrown by [AuthRepository.verifyActiveOwnerPin] when the PIN itself was
+/// correct but that staff member isn't currently an active owner (wrong
+/// role, deactivated, or the staff record is gone) — a distinct case from
+/// [StaffRecordNotFoundException], which covers email-link sign-in; this
+/// one is specifically "the PIN check passed, but this isn't a valid
+/// owner-approval signature."
+class NotAnActiveOwnerException implements Exception {
+  const NotAnActiveOwnerException();
+}
+
 /// Outcome of [AuthRepository.setPinForVerifiedDevice]. [staffMember] is
 /// always the person who just finished setup; [activated] says whether
 /// their session became this app's active one. When it didn't (someone
@@ -149,6 +159,36 @@ abstract class AuthRepository {
   /// [StaffRecordNotFoundException] if the staff record disappeared
   /// between email verification and now.
   Future<SetPinResult> setPinForVerifiedDevice({required String email, required String pin});
+
+  /// Verifies [pin] against the LOCAL credential for [email] — same
+  /// local-only checks [signInWithEmailAndPin] already does (a stored
+  /// credential exists, isn't locked out, the PIN hash matches) — but
+  /// NEVER touches the active session: [currentUser] and
+  /// [authStateChanges] are completely unaffected, on success or
+  /// failure. On success, additionally confirms — via one Firestore
+  /// read performed as THAT email's own cached session, never the
+  /// caller's active one — that they're currently an active staff
+  /// member with role 'owner', throwing [NotAnActiveOwnerException] if
+  /// not. Built for exactly one purpose: a shared-device "the owner
+  /// needs to approve this right now" moment (see the gifting feature)
+  /// where whoever is currently signed in must stay signed in
+  /// regardless of the outcome. Returns that owner's uid on success —
+  /// callers writing something as their own session (via
+  /// [firestoreForEmail]) need it to attribute the write. Throws
+  /// [InvalidCredentialsException] / [PinLockedException] /
+  /// [DeviceVerificationRequiredException] with the same meanings as
+  /// [signInWithEmailAndPin].
+  Future<String> verifyActiveOwnerPin({required String email, required String pin});
+
+  /// The authenticated Firestore instance for [email]'s own cached
+  /// session — meaningful only immediately after
+  /// [verifyActiveOwnerPin] has just succeeded for that same email.
+  /// Lets a caller perform ONE write as that specific person's own
+  /// genuine session (so a security rule's request.auth.uid check is
+  /// real, not a client-side PIN check that was verified and then
+  /// discarded) without ever switching who's active. Null if that
+  /// email has no cached session at all.
+  FirebaseFirestore? firestoreForEmail(String email);
 
   /// Deactivates the current session (returns to Login) WITHOUT touching
   /// the underlying Firebase session or the local PIN credential — the
