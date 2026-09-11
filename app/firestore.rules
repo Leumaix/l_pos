@@ -76,10 +76,10 @@ service cloud.firestore {
     // in explicitly from resource.data (the doc's state before deletion).
     // One getAfter() call, reused via `let`, rather than two identical
     // calls inline.
-    function shiftCloseIsPaired(businessId, plannedHistoryId, openingFloatNaira, cashTotalNaira) {
+    function shiftCloseIsPaired(businessId, plannedHistoryId, openingFloatNaira, cashTotalNaira, expenseTotalNaira) {
       let historyDoc = getAfter(/databases/$(database)/documents/businesses/$(businessId)/shiftHistory/$(plannedHistoryId));
       return historyDoc.data.closedAt is timestamp
-        && historyDoc.data.expectedCashNaira == openingFloatNaira + cashTotalNaira;
+        && historyDoc.data.expectedCashNaira == openingFloatNaira + cashTotalNaira - expenseTotalNaira;
     }
 
     // Split-tender helpers — a sale's `payments` list, up to
@@ -179,6 +179,25 @@ service cloud.firestore {
         && after.transferTotalNaira - before.transferTotalNaira == paymentsSumForMethod(payments, 'transfer')
         && after.creditTotalNaira - before.creditTotalNaira == paymentsSumForMethod(payments, 'customerAccount')
         && after.salesCount - before.salesCount == 1;
+    }
+
+    // Same role as shiftTotalsMatchSale above, for a cash expense instead
+    // of a sale: cross-checks shiftState/current's expenseTotalNaira
+    // increment against what the expense referenced by lastExpenseId
+    // actually says, AND that the expense's own claimed shiftId really is
+    // THIS shift — not just "some expense with the right amount exists."
+    // That second check is deliberately independent of (not just relying
+    // on) the expenses/{expenseId} create rule's own shiftId check below:
+    // this function alone is what makes the shiftState update rule sound
+    // on its own, the same bar shiftTotalsMatchSale already holds for
+    // sales, rather than depending on a separate rule block never being
+    // weakened later. The caller is responsible for the anti-replay check
+    // (the expense must not have existed before this write) — see the
+    // shiftState update rule.
+    function shiftExpenseMatchesExpense(businessId, expenseId, before, after) {
+      let expense = getAfter(/databases/$(database)/documents/businesses/$(businessId)/expenses/$(expenseId));
+      return after.expenseTotalNaira - before.expenseTotalNaira == expense.data.amountNaira
+        && expense.data.shiftId == before.plannedHistoryId;
     }
 
     // Platform-operator config, not scoped to any business. Deliberately
@@ -596,6 +615,50 @@ service cloud.firestore {
         allow update, delete: if false;
       }
 
+      match /expenses/{expenseId} {
+        // Owner-read-only — revenue-adjacent spend detail, same boundary
+        // as /sales above. The running total this feeds into
+        // (shiftState/current.expenseTotalNaira) stays staff-readable —
+        // see that match block's own allow read — staff already sees
+        // every other till total today, this is one more, just not the
+        // itemized detail behind it.
+        allow read: if isActiveOwnerOf(businessId) || isPlatformSuperAdmin();
+
+        // Append-only — no update/delete path at all, from anyone, ever,
+        // same discipline as /sales and customers/{id}/transactions.
+        // Staff-attributed (request.auth.uid must be the staffId on the
+        // doc, not just any active staff member vouching for someone
+        // else), a real positive amount, one of the fixed payment
+        // methods/categories, a note whenever category is 'other' (the
+        // one place a category alone doesn't say what the money was
+        // for), and — for a cash expense only — a shiftId that actually
+        // matches the currently open shift. That last check is real,
+        // server-side enforcement of "the shift this claims to be against
+        // is the shift that's actually open right now," not just trusted
+        // client input; it's re-verified independently (not merely relied
+        // upon) by shiftExpenseMatchesExpense when the paired shiftState
+        // update happens — see that function's own comment for why both
+        // checks exist rather than just this one.
+        allow create: if isActiveStaffOf(businessId)
+          && request.auth.uid == request.resource.data.staffId
+          && request.resource.data.amountNaira is number
+          && request.resource.data.amountNaira > 0
+          && request.resource.data.paymentMethod in ['cash', 'transfer', 'other']
+          && request.resource.data.category in ['fuel', 'transport', 'maintenance', 'supplies', 'other']
+          && (request.resource.data.category != 'other'
+              || (request.resource.data.note is string && request.resource.data.note.size() > 0))
+          && (
+            request.resource.data.paymentMethod != 'cash'
+            || (
+              request.resource.data.shiftId is string
+              && exists(/databases/$(database)/documents/businesses/$(businessId)/shiftState/current)
+              && request.resource.data.shiftId ==
+                 get(/databases/$(database)/documents/businesses/$(businessId)/shiftState/current).data.plannedHistoryId
+            )
+          );
+        allow update, delete: if false;
+      }
+
       match /shiftState/{docId} {
         // A business day's cash-drawer tracking, scoped to the whole
         // business (not per staff member) — opened once, closed once,
@@ -617,31 +680,56 @@ service cloud.firestore {
           && request.resource.data.openingFloatNaira is number
           && request.resource.data.openingFloatNaira >= 0;
 
-        // Sale-time totals increment ONLY — never openingFloat/openedBy/
-        // plannedHistoryId/etc. This is the one write
+        // Exactly two legitimate update shapes, and only two — a sale
+        // commit or a cash-expense commit, never both fields of one
+        // mixed into a single write (no real client ever needs to do
+        // that, and allowing it would blur which cross-check is even
+        // supposed to apply). Each branch is a full, self-contained
+        // pairing check, same anti-replay + cross-check discipline as
+        // customers/{customerId}'s own lastTransactionId pattern:
+        //
+        // 1. Sale-time totals increment ONLY — never openingFloat/
+        // openedBy/plannedHistoryId/etc. This is the one write
         // FirebaseCheckoutRepository.commitSale performs mid-transaction.
-        // lastSaleId is written every time alongside the totals — same
-        // pairing pattern customers/{customerId}'s own lastTransactionId
-        // already uses — and shiftTotalsMatchSale cross-checks that the
-        // actual increment amounts match what that exact sale's payments
-        // say, closing the gap where nothing previously stopped
-        // shiftState and a sale from simply disagreeing (or a
-        // fabricated, inflated "change given" from moving cashTotalNaira
-        // by any amount with nothing tying it back to a real sale). The
-        // !exists() check is the same anti-replay fix as
-        // customers/{customerId}'s own lastTransactionId pairing — see
-        // that rule's comment for the exact hole it closes: without it,
-        // lastSaleId could point at an OLD, already-existing sale
-        // (staff can read the whole collection... except sales is
-        // owner-read-only, but a modified client could still guess/reuse
-        // an id it already wrote) to "prove" a fabricated totals change
-        // with no new sale ever created for it.
+        // lastSaleId is written every time alongside the totals, and
+        // shiftTotalsMatchSale cross-checks that the actual increment
+        // amounts match what that exact sale's payments say, closing the
+        // gap where nothing previously stopped shiftState and a sale from
+        // simply disagreeing (or a fabricated, inflated "change given"
+        // from moving cashTotalNaira by any amount with nothing tying it
+        // back to a real sale). The !exists() check is the anti-replay
+        // fix: without it, lastSaleId could point at an OLD, already-
+        // existing sale (staff can read the whole collection... except
+        // sales is owner-read-only, but a modified client could still
+        // guess/reuse an id it already wrote) to "prove" a fabricated
+        // totals change with no new sale ever created for it.
+        //
+        // 2. Cash-expense totals increment ONLY — expenseTotalNaira +
+        // lastExpenseId, the one write FirebaseExpenseRepository.
+        // commitExpense performs mid-transaction for a cash expense.
+        // Same !exists() anti-replay shape, and shiftExpenseMatchesExpense
+        // cross-checks both the amount AND that the expense's own
+        // shiftId really is this shift — see that function's own comment
+        // for why the shiftId check lives there and not only on the
+        // expense's create rule.
         allow update: if isActiveStaffOf(businessId)
-          && request.resource.data.diff(resource.data).affectedKeys()
-             .hasOnly(['cashTotalNaira', 'cardTotalNaira', 'transferTotalNaira', 'creditTotalNaira', 'salesCount', 'lastSaleId'])
-          && request.resource.data.lastSaleId is string
-          && !exists(/databases/$(database)/documents/businesses/$(businessId)/sales/$(request.resource.data.lastSaleId))
-          && shiftTotalsMatchSale(businessId, request.resource.data.lastSaleId, resource.data, request.resource.data);
+          && (
+               (
+                 request.resource.data.diff(resource.data).affectedKeys()
+                   .hasOnly(['cashTotalNaira', 'cardTotalNaira', 'transferTotalNaira', 'creditTotalNaira', 'salesCount', 'lastSaleId'])
+                 && request.resource.data.lastSaleId is string
+                 && !exists(/databases/$(database)/documents/businesses/$(businessId)/sales/$(request.resource.data.lastSaleId))
+                 && shiftTotalsMatchSale(businessId, request.resource.data.lastSaleId, resource.data, request.resource.data)
+               )
+               ||
+               (
+                 request.resource.data.diff(resource.data).affectedKeys()
+                   .hasOnly(['expenseTotalNaira', 'lastExpenseId'])
+                 && request.resource.data.lastExpenseId is string
+                 && !exists(/databases/$(database)/documents/businesses/$(businessId)/expenses/$(request.resource.data.lastExpenseId))
+                 && shiftExpenseMatchesExpense(businessId, request.resource.data.lastExpenseId, resource.data, request.resource.data)
+               )
+             );
 
         // Closing a shift deletes this doc — the ONLY way "a shift is
         // open" ever becomes false again. This is a real data-loss risk
@@ -671,7 +759,8 @@ service cloud.firestore {
                businessId,
                resource.data.plannedHistoryId,
                resource.data.openingFloatNaira,
-               resource.data.cashTotalNaira
+               resource.data.cashTotalNaira,
+               resource.data.expenseTotalNaira
              );
       }
 
