@@ -33,7 +33,9 @@ class CloseDayScreen extends ConsumerWidget {
         content: Text(
           'Expected ${formatNaira(preview.expectedCashNaira)} in the drawer '
           '(${formatNaira(preview.shift.openingFloatNaira)} float + '
-          '${formatNaira(preview.shift.cashTotalNaira)} cash sales).\n\n'
+          '${formatNaira(preview.shift.cashTotalNaira)} cash sales'
+          '${preview.shift.expenseTotalNaira > 0 ? ' − ${formatNaira(preview.shift.expenseTotalNaira)} cash expenses' : ''}'
+          ').\n\n'
           'You counted ${formatNaira(preview.countedCashNaira)} — '
           '${formatVariance(preview.varianceNaira)}.',
         ),
@@ -90,6 +92,7 @@ class CloseDayScreen extends ConsumerWidget {
                         children: [
                           _SummaryRow(label: 'Opening float', value: formatNaira(shift.openingFloatNaira)),
                           _SummaryRow(label: 'Cash sales', value: formatNaira(shift.cashTotalNaira)),
+                          _SummaryRow(label: 'Cash expenses', value: formatNaira(shift.expenseTotalNaira)),
                           _SummaryRow(label: 'Card sales', value: formatNaira(shift.cardTotalNaira)),
                           _SummaryRow(label: 'Transfer sales', value: formatNaira(shift.transferTotalNaira)),
                           _SummaryRow(
@@ -104,8 +107,9 @@ class CloseDayScreen extends ConsumerWidget {
                     Text('Count the drawer', style: AppTextStyles.headingSm),
                     const SizedBox(height: AppSpacing.sm),
                     Text(
-                      'Only cash sales affect what the drawer should hold — card, transfer, and '
-                      'customer-account sales never put physical cash in it.',
+                      'Only cash sales and cash expenses affect what the drawer should hold — card, '
+                      'transfer, and customer-account sales never put physical cash in it, and '
+                      'transfer/other expenses never take cash out of it.',
                       style: AppTextStyles.secondary(AppTextStyles.bodyMd),
                     ),
                     const SizedBox(height: AppSpacing.lg),

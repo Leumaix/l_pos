@@ -58,6 +58,33 @@ class FirebaseShiftRepository implements ShiftRepository {
       // the server assigns the real timestamp, resolves cleanly.
       return null;
     }
+    // Confirmed live (real device, local emulator): a watch-stream
+    // reconnect (see e.g. the RESOURCE_EXHAUSTED/too_many_pings noise
+    // this sandbox's network already produces) can deliver an
+    // intermediate snapshot event missing a field that a moment ago —
+    // and a moment later — was genuinely present, for a field with no
+    // serverTimestamp-style "still resolving" story of its own
+    // (expenseTotalNaira here; every numeric field is equally exposed).
+    // Same "skip this transient snapshot" philosophy as the openedAt
+    // guard above, generalized: a null/wrong-typed value on any of these
+    // means "not a complete, trustworthy snapshot yet", not "shift
+    // closed" — crashing the whole listener on a self-correcting glitch
+    // would be far worse than momentarily reusing the prior emission.
+    final requiredNumericFields = [
+      'openingFloatNaira',
+      'cashTotalNaira',
+      'cardTotalNaira',
+      'transferTotalNaira',
+      'creditTotalNaira',
+      'salesCount',
+      'expenseTotalNaira',
+    ];
+    if (requiredNumericFields.any((field) => data[field] is! num)) return null;
+    if (data['openedByStaffId'] is! String ||
+        data['openedByStaffName'] is! String ||
+        data['plannedHistoryId'] is! String) {
+      return null;
+    }
     return OpenShift(
       openingFloatNaira: (data['openingFloatNaira'] as num).toInt(),
       openedByStaffId: data['openedByStaffId'] as String,

@@ -8,3 +8,5 @@ import '../data/expense_repository.dart';
 final expenseRepositoryProvider = Provider<ExpenseRepository>(
   (ref) => FirebaseExpenseRepository(ref.watch(authRepositoryProvider)),
 );
+
+final expensesProvider = StreamProvider((ref) => ref.watch(expenseRepositoryProvider).watchExpenses());

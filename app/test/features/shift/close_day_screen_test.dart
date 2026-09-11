@@ -84,6 +84,60 @@ void main() {
     expect(shift.currentShift, isNull); // no longer open
   });
 
+  testWidgets(
+    'a cash expense shows in the summary and reduces expected cash — the confirmation dialog '
+    'mentions it too',
+    (tester) async {
+      var closed = false;
+      final (_, shift) = await pumpSignedInScreen(tester, onClosed: () => closed = true);
+      shift.debugApplySaleTotals(method: PaymentMethod.cash, amountNaira: 25000);
+      shift.debugApplyExpenseTotal(amountNaira: 4000);
+      await settle(tester);
+
+      expect(find.text('₦25,000'), findsOneWidget); // cash sales
+      expect(find.text('₦4,000'), findsOneWidget); // cash expenses
+
+      // Exact count against the reduced expected amount: 10000 + 25000 - 4000 = 31000.
+      await tester.enterText(find.byType(TextField), '31000');
+      await tester.pump(const Duration(milliseconds: 10));
+      await tester.ensureVisible(find.byType(AppButton));
+      await tester.tap(find.byType(AppButton));
+      await settle(tester);
+
+      expect(find.text('Close the day?'), findsOneWidget);
+      expect(find.textContaining('₦4,000 cash expenses'), findsOneWidget);
+      expect(find.textContaining('Exact'), findsOneWidget);
+
+      await tester.tap(find.text('Confirm'));
+      await settle(tester);
+
+      expect(closed, isTrue);
+    },
+  );
+
+  testWidgets(
+    'no cash expenses this shift: the confirmation dialog omits the expenses clause entirely, unchanged '
+    'from before this feature existed',
+    (tester) async {
+      final (_, shift) = await pumpSignedInScreen(tester, onClosed: () {});
+      shift.debugApplySaleTotals(method: PaymentMethod.cash, amountNaira: 25000);
+      await settle(tester);
+
+      await tester.enterText(find.byType(TextField), '35000');
+      await tester.pump(const Duration(milliseconds: 10));
+      await tester.ensureVisible(find.byType(AppButton));
+      await tester.tap(find.byType(AppButton));
+      await settle(tester);
+
+      // Proves the conditional clause is omitted: if it had rendered, the
+      // text right after "cash sales" would be " − ₦0 cash expenses)",
+      // not directly ")" — checking for "cash expenses" alone would also
+      // match this screen's own unrelated explanatory paragraph above the
+      // summary card.
+      expect(find.textContaining('₦25,000 cash sales)'), findsOneWidget);
+    },
+  );
+
   testWidgets('cancelling the confirmation leaves the shift open', (tester) async {
     var closed = false;
     final (_, shift) = await pumpSignedInScreen(tester, onClosed: () => closed = true);

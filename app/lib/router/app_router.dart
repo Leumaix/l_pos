@@ -9,6 +9,7 @@ import '../features/auth/presentation/verify_email_screen.dart';
 import '../features/business/presentation/settings_screen.dart';
 import '../features/customers/presentation/customer_detail_screen.dart';
 import '../features/customers/presentation/customers_screen.dart';
+import '../features/expenses/presentation/record_expense_screen.dart';
 import '../features/home/presentation/home_screen.dart';
 import '../features/reports/presentation/reports_screen.dart';
 import '../features/sell/presentation/payment_screen.dart';
@@ -92,6 +93,14 @@ final routerProvider = Provider<GoRouter>((ref) {
       // one to link to (see its open/closed banner).
       GoRoute(path: '/open-day', builder: (context, state) => OpenDayScreen(onOpened: () => context.go('/home'))),
       GoRoute(path: '/close-day', builder: (context, state) => CloseDayScreen(onClosed: () => context.go('/home'))),
+      // Any active staff member — not owner-only. Reachable regardless of
+      // whether a shift is open; only a CASH expense actually needs one
+      // (enforced by ExpenseController/firestore.rules), transfer/other
+      // work either way.
+      GoRoute(
+        path: '/record-expense',
+        builder: (context, state) => RecordExpenseScreen(onRecorded: () => context.go('/home')),
+      ),
       // Same owner-only-in-UI, rules-enforced-for-real pattern — see
       // firestore.rules' /categories and /products rules.
       GoRoute(
@@ -118,6 +127,7 @@ final routerProvider = Provider<GoRouter>((ref) {
                 builder: (context, state) => HomeScreen(
                   onSell: () => context.go('/sell'),
                   onCustomers: () => context.go('/customers'),
+                  onRecordExpense: () => context.push('/record-expense'),
                   onStock: () => context.go('/stock'),
                   onReports: () => context.go('/reports'),
                 ),
