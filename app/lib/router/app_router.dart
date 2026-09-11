@@ -10,6 +10,7 @@ import '../features/business/presentation/settings_screen.dart';
 import '../features/customers/presentation/customer_detail_screen.dart';
 import '../features/customers/presentation/customers_screen.dart';
 import '../features/expenses/presentation/record_expense_screen.dart';
+import '../features/gifts/presentation/record_gift_screen.dart';
 import '../features/home/presentation/home_screen.dart';
 import '../features/reports/presentation/reports_screen.dart';
 import '../features/sell/presentation/payment_screen.dart';
@@ -62,7 +63,8 @@ final routerProvider = Provider<GoRouter>((ref) {
       // back button, or the bottom nav bar's own tap index).
       final isOwner = authRepository.currentUser?.role == 'owner';
       final onOwnerOnlyRoute =
-          state.matchedLocation.startsWith('/stock') || state.matchedLocation.startsWith('/reports');
+          state.matchedLocation.startsWith('/stock') ||
+          state.matchedLocation.startsWith('/reports');
       if (signedIn && !isOwner && onOwnerOnlyRoute) return '/home';
 
       // No ringing up a sale before the day is opened — mirrors
@@ -72,34 +74,62 @@ final routerProvider = Provider<GoRouter>((ref) {
       // someone walk into Sell/Payment only to have checkout fail. Not
       // owner-gated — any staff member is blocked the same way.
       final onSellRoute = state.matchedLocation.startsWith('/sell');
-      if (signedIn && onSellRoute && shiftRepository.currentShift == null) return '/home';
+      if (signedIn && onSellRoute && shiftRepository.currentShift == null)
+        return '/home';
 
       return null;
     },
     routes: [
       GoRoute(path: '/login', builder: (context, state) => const LoginScreen()),
-      GoRoute(path: '/verify-email', builder: (context, state) => const VerifyEmailScreen()),
+      GoRoute(
+        path: '/verify-email',
+        builder: (context, state) => const VerifyEmailScreen(),
+      ),
       // Owner-only in the UI (see Home's account menu), enforced for
       // real by firestore.rules (isActiveOwnerOf) on the actual invite
       // writes — reaching this route some other way just shows an empty
       // list and a failed submit, nothing sensitive.
-      GoRoute(path: '/invite-staff', builder: (context, state) => const InviteStaffScreen()),
+      GoRoute(
+        path: '/invite-staff',
+        builder: (context, state) => const InviteStaffScreen(),
+      ),
       // Same owner-only-in-UI, rules-enforced-for-real pattern as
       // /invite-staff — see firestore.rules' scoped update on
       // businesses/{businessId}.settings.gasTankCapacityKg.
-      GoRoute(path: '/settings', builder: (context, state) => const SettingsScreen()),
+      GoRoute(
+        path: '/settings',
+        builder: (context, state) => const SettingsScreen(),
+      ),
       // Any active staff member — not owner-only. Reachable regardless
       // of whether a shift is currently open/closed; Home decides which
       // one to link to (see its open/closed banner).
-      GoRoute(path: '/open-day', builder: (context, state) => OpenDayScreen(onOpened: () => context.go('/home'))),
-      GoRoute(path: '/close-day', builder: (context, state) => CloseDayScreen(onClosed: () => context.go('/home'))),
+      GoRoute(
+        path: '/open-day',
+        builder: (context, state) =>
+            OpenDayScreen(onOpened: () => context.go('/home')),
+      ),
+      GoRoute(
+        path: '/close-day',
+        builder: (context, state) =>
+            CloseDayScreen(onClosed: () => context.go('/home')),
+      ),
       // Any active staff member — not owner-only. Reachable regardless of
       // whether a shift is open; only a CASH expense actually needs one
       // (enforced by ExpenseController/firestore.rules), transfer/other
       // work either way.
       GoRoute(
         path: '/record-expense',
-        builder: (context, state) => RecordExpenseScreen(onRecorded: () => context.go('/home')),
+        builder: (context, state) =>
+            RecordExpenseScreen(onRecorded: () => context.go('/home')),
+      ),
+      // Any active staff member — not owner-only. Unlike /record-expense,
+      // every gift needs an open shift (enforced by
+      // GiftController/firestore.rules) — the router doesn't pre-check
+      // this itself, same as /record-expense's own cash-only case.
+      GoRoute(
+        path: '/record-gift',
+        builder: (context, state) =>
+            RecordGiftScreen(onRecorded: () => context.go('/home')),
       ),
       // Same owner-only-in-UI, rules-enforced-for-real pattern — see
       // firestore.rules' /categories and /products rules.
@@ -128,6 +158,7 @@ final routerProvider = Provider<GoRouter>((ref) {
                   onSell: () => context.go('/sell'),
                   onCustomers: () => context.go('/customers'),
                   onRecordExpense: () => context.push('/record-expense'),
+                  onGiftStock: () => context.push('/record-gift'),
                   onStock: () => context.go('/stock'),
                   onReports: () => context.go('/reports'),
                 ),
@@ -145,15 +176,15 @@ final routerProvider = Provider<GoRouter>((ref) {
                   GoRoute(
                     path: 'payment',
                     builder: (context, state) => PaymentScreen(
-                      onSaleComplete: (sale) => context.pushReplacement('/sell/receipt'),
+                      onSaleComplete: (sale) =>
+                          context.pushReplacement('/sell/receipt'),
                       onEmptyCart: () => context.go('/sell'),
                     ),
                   ),
                   GoRoute(
                     path: 'receipt',
-                    builder: (context, state) => ReceiptScreen(
-                      onNewSale: () => context.go('/sell'),
-                    ),
+                    builder: (context, state) =>
+                        ReceiptScreen(onNewSale: () => context.go('/sell')),
                   ),
                 ],
               ),
@@ -164,7 +195,8 @@ final routerProvider = Provider<GoRouter>((ref) {
               GoRoute(
                 path: '/customers',
                 builder: (context, state) => CustomersScreen(
-                  onOpenCustomer: (customer) => context.push('/customers/${customer.id}'),
+                  onOpenCustomer: (customer) =>
+                      context.push('/customers/${customer.id}'),
                 ),
                 routes: [
                   GoRoute(

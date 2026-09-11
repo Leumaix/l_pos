@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../../../core/business_config.dart';
+import '../../../core/utils/replay_stream.dart';
 import '../../auth/data/auth_repository.dart';
 import '../../sell/data/inventory_repository.dart';
 import '../../shift/data/shift_repository.dart';
@@ -49,6 +52,10 @@ abstract class GiftRepository {
   /// consumed) — firestore.rules independently enforces this same
   /// pairing server-side either way.
   Future<void> commitGift({required Gift gift, int? gasUnitsDeducted});
+
+  /// Owner-only at the rules level — Reports' "Given away" total. Same
+  /// shape as ExpenseRepository.watchExpenses().
+  Stream<List<Gift>> watchGifts();
 }
 
 /// In-memory stand-in — delegates to the fakes it's handed, same
@@ -62,6 +69,7 @@ class FakeGiftRepository implements GiftRepository {
   final FakeShiftRepository _shift;
   final List<Gift> _gifts = [];
   final Map<String, String> _approvals = {}; // giftId -> ownerUid
+  final _controller = StreamController<List<Gift>>.broadcast();
 
   FakeGiftRepository({required this._inventory, required this._shift});
 
@@ -82,19 +90,34 @@ class FakeGiftRepository implements GiftRepository {
   @override
   Future<void> commitGift({required Gift gift, int? gasUnitsDeducted}) async {
     if (_shift.currentShift == null) throw const NoShiftOpenException();
-    if (gift.requiresApproval && _approvals[gift.id] != gift.approvedByOwnerUid) {
+    if (gift.requiresApproval &&
+        _approvals[gift.id] != gift.approvedByOwnerUid) {
       throw const GiftApprovalMissingException();
     }
 
     if (gift.itemType == GiftItemType.gas) {
-      await _inventory.deductGasStock(gasUnitsDeducted ?? 0, staffId: gift.staffId, staffName: gift.staffName);
+      await _inventory.deductGasStock(
+        gasUnitsDeducted ?? 0,
+        staffId: gift.staffId,
+        staffName: gift.staffName,
+      );
     } else {
-      await _inventory.decrementProductStock(gift.productId!, gift.quantity.round());
+      await _inventory.decrementProductStock(
+        gift.productId!,
+        gift.quantity.round(),
+      );
     }
 
     _gifts.add(gift);
-    _approvals.remove(gift.id); // consumed — same single-use shape as the real giftApprovals delete
+    _approvals.remove(
+      gift.id,
+    ); // consumed — same single-use shape as the real giftApprovals delete
+    _controller.add(List.unmodifiable(_gifts));
   }
+
+  @override
+  Stream<List<Gift>> watchGifts() =>
+      replayLatest(() => List.unmodifiable(_gifts), _controller.stream);
 
   /// Test-only visibility into what's been recorded so far.
   List<Gift> get debugGifts => List.unmodifiable(_gifts);
@@ -154,12 +177,16 @@ class FirebaseGiftRepository implements GiftRepository {
     // approvedByOwnerUid check on the create rule genuine.
     final ownerFirestore = _firebaseAuth.firestoreForEmail(ownerEmail);
     if (ownerFirestore == null) {
-      throw StateError('recordOwnerApproval: no cached session for $ownerEmail — was verifyActiveOwnerPin called first?');
+      throw StateError(
+        'recordOwnerApproval: no cached session for $ownerEmail — was verifyActiveOwnerPin called first?',
+      );
     }
-    await ownerFirestore.doc('businesses/$kBusinessId/giftApprovals/$giftId').set({
-      'approvedByOwnerUid': ownerUid,
-      'createdAt': FieldValue.serverTimestamp(),
-    });
+    await ownerFirestore
+        .doc('businesses/$kBusinessId/giftApprovals/$giftId')
+        .set({
+          'approvedByOwnerUid': ownerUid,
+          'createdAt': FieldValue.serverTimestamp(),
+        });
   }
 
   @override
@@ -175,12 +202,16 @@ class FirebaseGiftRepository implements GiftRepository {
         // Anti-replay consumption — see firestore.rules' matching
         // pairing check on giftApprovals' own delete rule (getAfter()
         // on this exact gift id).
-        transaction.delete(_firestore.doc('businesses/$kBusinessId/giftApprovals/${gift.id}'));
+        transaction.delete(
+          _firestore.doc('businesses/$kBusinessId/giftApprovals/${gift.id}'),
+        );
       }
 
       if (gift.itemType == GiftItemType.gas) {
         final units = gasUnitsDeducted ?? 0;
-        transaction.set(_gasStockDoc, {'units': FieldValue.increment(-units)}, SetOptions(merge: true));
+        transaction.set(_gasStockDoc, {
+          'units': FieldValue.increment(-units),
+        }, SetOptions(merge: true));
         transaction.set(_gasStockLedgerCollection.doc(), {
           'type': 'gift',
           'unitsDelta': -units,
@@ -201,6 +232,24 @@ class FirebaseGiftRepository implements GiftRepository {
     });
   }
 
+  @override
+  Stream<List<Gift>> watchGifts() {
+    return _giftsCollection
+        .orderBy('createdAt', descending: true)
+        .snapshots()
+        .map(
+          (snapshot) => snapshot.docs
+              // createdAt is FieldValue.serverTimestamp() — a brand-new
+              // gift's local, pre-confirmation snapshot briefly has it as
+              // null. Skip it for this emission rather than crash the whole
+              // stream on the cast below — same reasoning
+              // FirebaseExpenseRepository.watchExpenses already established.
+              .where((doc) => doc.data()['createdAt'] is Timestamp)
+              .map(_giftFromDoc)
+              .toList(),
+        );
+  }
+
   static Map<String, dynamic> _giftToDoc(Gift gift) => {
     'itemType': gift.itemType.name,
     'productId': gift.productId,
@@ -214,4 +263,22 @@ class FirebaseGiftRepository implements GiftRepository {
     'approvedByOwnerUid': gift.approvedByOwnerUid,
     'createdAt': FieldValue.serverTimestamp(),
   };
+
+  static Gift _giftFromDoc(QueryDocumentSnapshot<Map<String, dynamic>> doc) {
+    final data = doc.data();
+    return Gift(
+      id: doc.id,
+      itemType: GiftItemType.values.byName(data['itemType'] as String),
+      productId: data['productId'] as String?,
+      quantity: data['quantity'] as num,
+      estimatedValueNaira: (data['estimatedValueNaira'] as num).toInt(),
+      reason: data['reason'] as String,
+      staffId: data['staffId'] as String,
+      staffName: data['staffName'] as String,
+      shiftId: data['shiftId'] as String,
+      requiresApproval: data['requiresApproval'] as bool,
+      approvedByOwnerUid: data['approvedByOwnerUid'] as String?,
+      createdAt: (data['createdAt'] as Timestamp).toDate(),
+    );
+  }
 }

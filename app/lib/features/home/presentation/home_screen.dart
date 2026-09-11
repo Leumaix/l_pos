@@ -28,6 +28,10 @@ class HomeScreen extends ConsumerWidget {
   /// isOwner already gates Stock/Reports with below.
   final VoidCallback? onRecordExpense;
 
+  /// Same optional-tile shape as [onRecordExpense] — null omits "Gift
+  /// stock" entirely (mobile-only for now).
+  final VoidCallback? onGiftStock;
+
   final VoidCallback onStock;
   final VoidCallback onReports;
 
@@ -44,6 +48,7 @@ class HomeScreen extends ConsumerWidget {
     required this.onSell,
     required this.onCustomers,
     this.onRecordExpense,
+    this.onGiftStock,
     required this.onStock,
     required this.onReports,
     this.showStaffHandoffOption = true,
@@ -74,7 +79,10 @@ class HomeScreen extends ConsumerWidget {
                       businessName,
                       style: AppTextStyles.secondary(AppTextStyles.labelMd),
                     ),
-                    _AccountButton(user: user, showStaffHandoffOption: showStaffHandoffOption),
+                    _AccountButton(
+                      user: user,
+                      showStaffHandoffOption: showStaffHandoffOption,
+                    ),
                   ],
                 ),
                 const SizedBox(height: AppSpacing.md),
@@ -100,6 +108,7 @@ class HomeScreen extends ConsumerWidget {
                     onSell: onSell,
                     onCustomers: onCustomers,
                     onRecordExpense: onRecordExpense,
+                    onGiftStock: onGiftStock,
                     onStock: onStock,
                     onReports: onReports,
                   ),
@@ -151,14 +160,20 @@ class _ShiftBanner extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('The day hasn\'t been opened yet', style: AppTextStyles.headingSm),
+            Text(
+              'The day hasn\'t been opened yet',
+              style: AppTextStyles.headingSm,
+            ),
             const SizedBox(height: AppSpacing.xs),
             Text(
               'Open the day to declare a starting cash float before selling.',
               style: AppTextStyles.secondary(AppTextStyles.bodyMd),
             ),
             const SizedBox(height: AppSpacing.md),
-            AppButton(label: 'Open the day', onPressed: () => context.push('/open-day')),
+            AppButton(
+              label: 'Open the day',
+              onPressed: () => context.push('/open-day'),
+            ),
           ],
         ),
       );
@@ -172,10 +187,19 @@ class _ShiftBanner extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Day is open', style: AppTextStyles.secondary(AppTextStyles.bodySm)),
+                Text(
+                  'Day is open',
+                  style: AppTextStyles.secondary(AppTextStyles.bodySm),
+                ),
                 const SizedBox(height: AppSpacing.xs),
-                Text(formatNaira(shift.expectedCashNaira), style: AppTextStyles.numericMd),
-                Text('expected in drawer', style: AppTextStyles.secondary(AppTextStyles.bodySm)),
+                Text(
+                  formatNaira(shift.expectedCashNaira),
+                  style: AppTextStyles.numericMd,
+                ),
+                Text(
+                  'expected in drawer',
+                  style: AppTextStyles.secondary(AppTextStyles.bodySm),
+                ),
               ],
             ),
           ),
@@ -200,7 +224,10 @@ class _AccountButton extends ConsumerWidget {
   final AppUser? user;
   final bool showStaffHandoffOption;
 
-  const _AccountButton({required this.user, required this.showStaffHandoffOption});
+  const _AccountButton({
+    required this.user,
+    required this.showStaffHandoffOption,
+  });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -291,7 +318,9 @@ class _AccountButton extends ConsumerWidget {
                       ),
                       onTap: () {
                         Navigator.of(sheetContext).pop();
-                        ref.read(verificationControllerProvider.notifier).start();
+                        ref
+                            .read(verificationControllerProvider.notifier)
+                            .start();
                         context.push('/verify-email');
                       },
                     ),
@@ -322,6 +351,7 @@ class _DashboardBody extends StatelessWidget {
   final VoidCallback onSell;
   final VoidCallback onCustomers;
   final VoidCallback? onRecordExpense;
+  final VoidCallback? onGiftStock;
   final VoidCallback onStock;
   final VoidCallback onReports;
 
@@ -333,6 +363,7 @@ class _DashboardBody extends StatelessWidget {
     required this.onSell,
     required this.onCustomers,
     this.onRecordExpense,
+    this.onGiftStock,
     required this.onStock,
     required this.onReports,
   });
@@ -423,6 +454,16 @@ class _DashboardBody extends StatelessWidget {
                 icon: Icons.receipt_long_outlined,
                 label: 'Record expense',
                 onTap: onRecordExpense!,
+              ),
+            // Same any-active-staff, mobile-only-for-now, optional-tile
+            // shape as Record expense directly above — individual gift
+            // records are owner-read-only at the rules level, recording
+            // one isn't.
+            if (onGiftStock != null)
+              _QuickAction(
+                icon: Icons.card_giftcard_outlined,
+                label: 'Gift stock',
+                onTap: onGiftStock!,
               ),
             // Stock and Reports expose business-wide inventory value and
             // sales history — owner-only, same boundary as the account

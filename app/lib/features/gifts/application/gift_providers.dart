@@ -8,3 +8,7 @@ import '../data/gift_repository.dart';
 final giftRepositoryProvider = Provider<GiftRepository>(
   (ref) => FirebaseGiftRepository(ref.watch(authRepositoryProvider)),
 );
+
+final giftsProvider = StreamProvider(
+  (ref) => ref.watch(giftRepositoryProvider).watchGifts(),
+);
