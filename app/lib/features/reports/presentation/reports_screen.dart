@@ -16,6 +16,8 @@ import '../../customers/application/customer_providers.dart';
 import '../../customers/domain/customer_totals.dart';
 import '../../expenses/application/expense_providers.dart';
 import '../../expenses/domain/expenses_report.dart';
+import '../../gifts/application/gift_providers.dart';
+import '../../gifts/domain/gifts_report.dart';
 import '../../sell/application/inventory_providers.dart';
 import '../../sell/application/sales_providers.dart';
 import '../../shift/application/shift_providers.dart';
@@ -82,170 +84,214 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
                 // this is purely additive, not a reorganization of it.
                 if (isDesktop)
                   _buildDesktopDashboard()
-                else
-                  ...[
-                salesAsync.when(
-                  data: (sales) {
-                    final report = buildSalesReport(sales, range: _range, now: DateTime.now());
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        AppCard(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                switch (_range) {
-                                  ReportRange.today => "Today's sales",
-                                  ReportRange.week => 'This week\'s sales',
-                                  ReportRange.month => 'This month\'s sales',
-                                },
-                                style: AppTextStyles.secondary(AppTextStyles.bodySm),
-                              ),
-                              const SizedBox(height: AppSpacing.xs),
-                              Text(formatNaira(report.totalForRange), style: AppTextStyles.numericXl),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: AppSpacing.lg),
-                        Text('Last 7 days', style: AppTextStyles.headingSm),
-                        const SizedBox(height: AppSpacing.md),
-                        AppCard(child: _DailyChart(days: report.last7Days)),
-                        const SizedBox(height: AppSpacing.lg),
-                        Text('By product type', style: AppTextStyles.headingSm),
-                        const SizedBox(height: AppSpacing.md),
-                        AppCard(
-                          child: Column(
-                            children: [
-                              _BreakdownRow(label: 'Gas', value: report.breakdown.gas),
-                              _BreakdownRow(
-                                label: 'Products',
-                                value: report.breakdown.products,
-                                isLast: true,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    );
-                  },
-                  loading: () => const Padding(
-                    padding: EdgeInsets.symmetric(vertical: AppSpacing.xl),
-                    child: Center(child: CircularProgressIndicator(color: AppColors.accent)),
-                  ),
-                  error: (err, _) => Text(
-                    'Could not load sales',
-                    style: AppTextStyles.danger(AppTextStyles.bodyMd),
-                  ),
-                ),
-                const SizedBox(height: AppSpacing.lg),
-                _ExpensesAndNetSection(range: _range),
-                const SizedBox(height: AppSpacing.xl),
-                Text('Stock snapshot', style: AppTextStyles.headingSm),
-                const SizedBox(height: AppSpacing.md),
-                gasStockAsync.when(
-                  data: (gasStock) {
-                    // Same source Stock's own gauge reads — kgRemaining is
-                    // never recomputed independently here.
-                    final kg = kgRemaining(gasStock, rate);
-                    final fraction = (kg / capacityKg).clamp(0.0, 1.0);
-                    return AppCard(
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                else ...[
+                  salesAsync.when(
+                    data: (sales) {
+                      final report = buildSalesReport(
+                        sales,
+                        range: _range,
+                        now: DateTime.now(),
+                      );
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('Gas remaining', style: AppTextStyles.secondary(AppTextStyles.bodyMd)),
+                          AppCard(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  switch (_range) {
+                                    ReportRange.today => "Today's sales",
+                                    ReportRange.week => 'This week\'s sales',
+                                    ReportRange.month => 'This month\'s sales',
+                                  },
+                                  style: AppTextStyles.secondary(
+                                    AppTextStyles.bodySm,
+                                  ),
+                                ),
+                                const SizedBox(height: AppSpacing.xs),
+                                Text(
+                                  formatNaira(report.totalForRange),
+                                  style: AppTextStyles.numericXl,
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: AppSpacing.lg),
+                          Text('Last 7 days', style: AppTextStyles.headingSm),
+                          const SizedBox(height: AppSpacing.md),
+                          AppCard(child: _DailyChart(days: report.last7Days)),
+                          const SizedBox(height: AppSpacing.lg),
                           Text(
-                            '${formatKg(kg)} (${(fraction * 100).round()}%)',
-                            style: AppTextStyles.numericSm,
+                            'By product type',
+                            style: AppTextStyles.headingSm,
+                          ),
+                          const SizedBox(height: AppSpacing.md),
+                          AppCard(
+                            child: Column(
+                              children: [
+                                _BreakdownRow(
+                                  label: 'Gas',
+                                  value: report.breakdown.gas,
+                                ),
+                                _BreakdownRow(
+                                  label: 'Products',
+                                  value: report.breakdown.products,
+                                  isLast: true,
+                                ),
+                              ],
+                            ),
                           ),
                         ],
+                      );
+                    },
+                    loading: () => const Padding(
+                      padding: EdgeInsets.symmetric(vertical: AppSpacing.xl),
+                      child: Center(
+                        child: CircularProgressIndicator(
+                          color: AppColors.accent,
+                        ),
                       ),
-                    );
-                  },
-                  loading: () => const SizedBox.shrink(),
-                  error: (err, _) => const SizedBox.shrink(),
-                ),
-                const SizedBox(height: AppSpacing.sm),
-                productsAsync.when(
-                  data: (products) {
-                    final lowStockCount = products
-                        .where((p) => p.stockCount <= kLowStockThreshold)
-                        .length;
-                    return AppCard(
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text('Low-stock items', style: AppTextStyles.secondary(AppTextStyles.bodyMd)),
-                          Text(
-                            '$lowStockCount',
-                            style: lowStockCount > 0
-                                ? AppTextStyles.danger(AppTextStyles.numericSm)
-                                : AppTextStyles.numericSm,
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                  loading: () => const SizedBox.shrink(),
-                  error: (err, _) => const SizedBox.shrink(),
-                ),
-                const SizedBox(height: AppSpacing.xl),
-                customersAsync.when(
-                  data: (customers) => Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(AppSpacing.lg),
-                    decoration: BoxDecoration(
-                      color: AppColors.dangerBg,
-                      borderRadius: BorderRadius.circular(AppSpacing.cardRadius),
                     ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Debtors outstanding',
-                          style: AppTextStyles.secondary(AppTextStyles.bodySm),
-                        ),
-                        const SizedBox(height: AppSpacing.xs),
-                        Text(
-                          // Same shared helper Home and the Customers list
-                          // banner both call — never summed separately here.
-                          formatNaira(totalOwedByCustomers(customers)),
-                          style: AppTextStyles.numericXl.copyWith(color: AppColors.danger),
-                        ),
-                      ],
+                    error: (err, _) => Text(
+                      'Could not load sales',
+                      style: AppTextStyles.danger(AppTextStyles.bodyMd),
                     ),
                   ),
-                  loading: () => const SizedBox.shrink(),
-                  error: (err, _) => const SizedBox.shrink(),
-                ),
-                const SizedBox(height: AppSpacing.xl),
-                Text('Shift history', style: AppTextStyles.headingSm),
-                const SizedBox(height: AppSpacing.sm),
-                Text(
-                  'Every closed business day — the cash float declared, per-method '
-                  'totals, and how the counted drawer compared to what was expected.',
-                  style: AppTextStyles.secondary(AppTextStyles.bodyMd),
-                ),
-                const SizedBox(height: AppSpacing.md),
-                shiftHistoryAsync.when(
-                  data: (shifts) => shifts.isEmpty
-                      ? Text(
-                          'No shifts closed yet.',
-                          style: AppTextStyles.secondary(AppTextStyles.bodyMd),
-                        )
-                      : Column(
+                  const SizedBox(height: AppSpacing.lg),
+                  _ExpensesAndNetSection(range: _range),
+                  const SizedBox(height: AppSpacing.lg),
+                  _GiftsSection(range: _range),
+                  const SizedBox(height: AppSpacing.xl),
+                  Text('Stock snapshot', style: AppTextStyles.headingSm),
+                  const SizedBox(height: AppSpacing.md),
+                  gasStockAsync.when(
+                    data: (gasStock) {
+                      // Same source Stock's own gauge reads — kgRemaining is
+                      // never recomputed independently here.
+                      final kg = kgRemaining(gasStock, rate);
+                      final fraction = (kg / capacityKg).clamp(0.0, 1.0);
+                      return AppCard(
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            for (final shift in shifts) ...[
-                              _ShiftHistoryCard(shift: shift),
-                              const SizedBox(height: AppSpacing.sm),
-                            ],
+                            Text(
+                              'Gas remaining',
+                              style: AppTextStyles.secondary(
+                                AppTextStyles.bodyMd,
+                              ),
+                            ),
+                            Text(
+                              '${formatKg(kg)} (${(fraction * 100).round()}%)',
+                              style: AppTextStyles.numericSm,
+                            ),
                           ],
                         ),
-                  loading: () => const Center(child: CircularProgressIndicator(color: AppColors.accent)),
-                  error: (err, _) =>
-                      Text('Could not load shift history', style: AppTextStyles.danger(AppTextStyles.bodyMd)),
-                ),
-                  ],
+                      );
+                    },
+                    loading: () => const SizedBox.shrink(),
+                    error: (err, _) => const SizedBox.shrink(),
+                  ),
+                  const SizedBox(height: AppSpacing.sm),
+                  productsAsync.when(
+                    data: (products) {
+                      final lowStockCount = products
+                          .where((p) => p.stockCount <= kLowStockThreshold)
+                          .length;
+                      return AppCard(
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              'Low-stock items',
+                              style: AppTextStyles.secondary(
+                                AppTextStyles.bodyMd,
+                              ),
+                            ),
+                            Text(
+                              '$lowStockCount',
+                              style: lowStockCount > 0
+                                  ? AppTextStyles.danger(
+                                      AppTextStyles.numericSm,
+                                    )
+                                  : AppTextStyles.numericSm,
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                    loading: () => const SizedBox.shrink(),
+                    error: (err, _) => const SizedBox.shrink(),
+                  ),
+                  const SizedBox(height: AppSpacing.xl),
+                  customersAsync.when(
+                    data: (customers) => Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(AppSpacing.lg),
+                      decoration: BoxDecoration(
+                        color: AppColors.dangerBg,
+                        borderRadius: BorderRadius.circular(
+                          AppSpacing.cardRadius,
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Debtors outstanding',
+                            style: AppTextStyles.secondary(
+                              AppTextStyles.bodySm,
+                            ),
+                          ),
+                          const SizedBox(height: AppSpacing.xs),
+                          Text(
+                            // Same shared helper Home and the Customers list
+                            // banner both call — never summed separately here.
+                            formatNaira(totalOwedByCustomers(customers)),
+                            style: AppTextStyles.numericXl.copyWith(
+                              color: AppColors.danger,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    loading: () => const SizedBox.shrink(),
+                    error: (err, _) => const SizedBox.shrink(),
+                  ),
+                  const SizedBox(height: AppSpacing.xl),
+                  Text('Shift history', style: AppTextStyles.headingSm),
+                  const SizedBox(height: AppSpacing.sm),
+                  Text(
+                    'Every closed business day — the cash float declared, per-method '
+                    'totals, and how the counted drawer compared to what was expected.',
+                    style: AppTextStyles.secondary(AppTextStyles.bodyMd),
+                  ),
+                  const SizedBox(height: AppSpacing.md),
+                  shiftHistoryAsync.when(
+                    data: (shifts) => shifts.isEmpty
+                        ? Text(
+                            'No shifts closed yet.',
+                            style: AppTextStyles.secondary(
+                              AppTextStyles.bodyMd,
+                            ),
+                          )
+                        : Column(
+                            children: [
+                              for (final shift in shifts) ...[
+                                _ShiftHistoryCard(shift: shift),
+                                const SizedBox(height: AppSpacing.sm),
+                              ],
+                            ],
+                          ),
+                    loading: () => const Center(
+                      child: CircularProgressIndicator(color: AppColors.accent),
+                    ),
+                    error: (err, _) => Text(
+                      'Could not load shift history',
+                      style: AppTextStyles.danger(AppTextStyles.bodyMd),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -266,6 +312,7 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
   Widget _buildDesktopDashboard() {
     final salesAsync = ref.watch(salesProvider);
     final expensesAsync = ref.watch(expensesProvider);
+    final giftsAsync = ref.watch(giftsProvider);
     final gasStockAsync = ref.watch(gasStockProvider);
     final rate = ref.watch(gasRateProvider);
     final productsAsync = ref.watch(productsProvider);
@@ -292,6 +339,10 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
     final netForRange = (report == null || expensesReport == null)
         ? null
         : report.totalForRange - expensesReport.totalForRange;
+    final gifts = giftsAsync.valueOrNull;
+    final giftsReport = gifts == null
+        ? null
+        : buildGiftsReport(gifts, range: _range, now: DateTime.now());
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -303,14 +354,18 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
               Expanded(
                 child: StatCard(
                   label: salesLabel,
-                  value: report == null ? '—' : formatNaira(report.totalForRange),
+                  value: report == null
+                      ? '—'
+                      : formatNaira(report.totalForRange),
                 ),
               ),
               const SizedBox(width: AppSpacing.md),
               Expanded(
                 child: StatCard(
                   label: 'Expenses',
-                  value: expensesReport == null ? '—' : formatNaira(expensesReport.totalForRange),
+                  value: expensesReport == null
+                      ? '—'
+                      : formatNaira(expensesReport.totalForRange),
                 ),
               ),
               const SizedBox(width: AppSpacing.md),
@@ -318,7 +373,21 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
                 child: StatCard(
                   label: 'Net',
                   value: netForRange == null ? '—' : formatNaira(netForRange),
-                  valueColor: netForRange != null && netForRange < 0 ? AppColors.danger : null,
+                  valueColor: netForRange != null && netForRange < 0
+                      ? AppColors.danger
+                      : null,
+                ),
+              ),
+              const SizedBox(width: AppSpacing.md),
+              // Never folded into Net above — a gift is never revenue,
+              // shown separately by design (see gifts_report.dart's own
+              // doc comment).
+              Expanded(
+                child: StatCard(
+                  label: 'Given away',
+                  value: giftsReport == null
+                      ? '—'
+                      : formatNaira(giftsReport.totalForRange),
                 ),
               ),
               const SizedBox(width: AppSpacing.md),
@@ -345,16 +414,19 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
               Expanded(
                 child: productsAsync.when(
                   data: (products) {
-                    final lowStockCount =
-                        products.where((p) => p.stockCount <= kLowStockThreshold).length;
+                    final lowStockCount = products
+                        .where((p) => p.stockCount <= kLowStockThreshold)
+                        .length;
                     return StatCard(
                       label: 'Low-stock items',
                       value: '$lowStockCount',
                       valueColor: lowStockCount > 0 ? AppColors.danger : null,
                     );
                   },
-                  loading: () => const StatCard(label: 'Low-stock items', value: '—'),
-                  error: (err, _) => const StatCard(label: 'Low-stock items', value: '—'),
+                  loading: () =>
+                      const StatCard(label: 'Low-stock items', value: '—'),
+                  error: (err, _) =>
+                      const StatCard(label: 'Low-stock items', value: '—'),
                 ),
               ),
               const SizedBox(width: AppSpacing.md),
@@ -365,8 +437,10 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
                     value: formatNaira(totalOwedByCustomers(customers)),
                     valueColor: AppColors.danger,
                   ),
-                  loading: () => const StatCard(label: 'Debtors outstanding', value: '—'),
-                  error: (err, _) => const StatCard(label: 'Debtors outstanding', value: '—'),
+                  loading: () =>
+                      const StatCard(label: 'Debtors outstanding', value: '—'),
+                  error: (err, _) =>
+                      const StatCard(label: 'Debtors outstanding', value: '—'),
                 ),
               ),
             ],
@@ -387,10 +461,17 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
                   else if (salesAsync.isLoading)
                     const Padding(
                       padding: EdgeInsets.symmetric(vertical: AppSpacing.xl),
-                      child: Center(child: CircularProgressIndicator(color: AppColors.accent)),
+                      child: Center(
+                        child: CircularProgressIndicator(
+                          color: AppColors.accent,
+                        ),
+                      ),
                     )
                   else
-                    Text('Could not load sales', style: AppTextStyles.danger(AppTextStyles.bodyMd)),
+                    Text(
+                      'Could not load sales',
+                      style: AppTextStyles.danger(AppTextStyles.bodyMd),
+                    ),
                   const SizedBox(height: AppSpacing.lg),
                   Text('By product type', style: AppTextStyles.headingSm),
                   const SizedBox(height: AppSpacing.md),
@@ -398,7 +479,10 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
                     AppCard(
                       child: Column(
                         children: [
-                          _BreakdownRow(label: 'Gas', value: report.breakdown.gas),
+                          _BreakdownRow(
+                            label: 'Gas',
+                            value: report.breakdown.gas,
+                          ),
                           _BreakdownRow(
                             label: 'Products',
                             value: report.breakdown.products,
@@ -427,7 +511,9 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
                     data: (shifts) => shifts.isEmpty
                         ? Text(
                             'No shifts closed yet.',
-                            style: AppTextStyles.secondary(AppTextStyles.bodyMd),
+                            style: AppTextStyles.secondary(
+                              AppTextStyles.bodyMd,
+                            ),
                           )
                         : Column(
                             children: [
@@ -437,8 +523,9 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
                               ],
                             ],
                           ),
-                    loading: () =>
-                        const Center(child: CircularProgressIndicator(color: AppColors.accent)),
+                    loading: () => const Center(
+                      child: CircularProgressIndicator(color: AppColors.accent),
+                    ),
                     error: (err, _) => Text(
                       'Could not load shift history',
                       style: AppTextStyles.danger(AppTextStyles.bodyMd),
@@ -471,9 +558,12 @@ class _ExpensesAndNetSection extends ConsumerWidget {
     final sales = salesAsync.valueOrNull;
     final expenses = expensesAsync.valueOrNull;
 
-    final salesReport = sales == null ? null : buildSalesReport(sales, range: range, now: DateTime.now());
-    final expensesReport =
-        expenses == null ? null : buildExpensesReport(expenses, range: range, now: DateTime.now());
+    final salesReport = sales == null
+        ? null
+        : buildSalesReport(sales, range: range, now: DateTime.now());
+    final expensesReport = expenses == null
+        ? null
+        : buildExpensesReport(expenses, range: range, now: DateTime.now());
     final netForRange = (salesReport == null || expensesReport == null)
         ? null
         : salesReport.totalForRange - expensesReport.totalForRange;
@@ -483,7 +573,9 @@ class _ExpensesAndNetSection extends ConsumerWidget {
         Expanded(
           child: StatCard(
             label: 'Expenses',
-            value: expensesReport == null ? '—' : formatNaira(expensesReport.totalForRange),
+            value: expensesReport == null
+                ? '—'
+                : formatNaira(expensesReport.totalForRange),
           ),
         ),
         const SizedBox(width: AppSpacing.md),
@@ -491,10 +583,36 @@ class _ExpensesAndNetSection extends ConsumerWidget {
           child: StatCard(
             label: 'Net',
             value: netForRange == null ? '—' : formatNaira(netForRange),
-            valueColor: netForRange != null && netForRange < 0 ? AppColors.danger : null,
+            valueColor: netForRange != null && netForRange < 0
+                ? AppColors.danger
+                : null,
           ),
         ),
       ],
+    );
+  }
+}
+
+/// Additive alongside the sales/expenses cards above — never folded into
+/// Net (see gifts_report.dart's own doc comment: a gift is never
+/// revenue). Same .valueOrNull composition pattern as
+/// _ExpensesAndNetSection.
+class _GiftsSection extends ConsumerWidget {
+  final ReportRange range;
+
+  const _GiftsSection({required this.range});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final giftsAsync = ref.watch(giftsProvider);
+    final gifts = giftsAsync.valueOrNull;
+    final giftsReport = gifts == null
+        ? null
+        : buildGiftsReport(gifts, range: range, now: DateTime.now());
+
+    return StatCard(
+      label: 'Given away',
+      value: giftsReport == null ? '—' : formatNaira(giftsReport.totalForRange),
     );
   }
 }
@@ -540,9 +658,19 @@ class _ShiftHistoryCard extends StatelessWidget {
           _BreakdownRow(label: 'Cash sales', value: shift.cashTotalNaira),
           _BreakdownRow(label: 'Cash expenses', value: shift.expenseTotalNaira),
           _BreakdownRow(label: 'Card sales', value: shift.cardTotalNaira),
-          _BreakdownRow(label: 'Transfer sales', value: shift.transferTotalNaira),
-          _BreakdownRow(label: 'Customer account sales', value: shift.creditTotalNaira),
-          _BreakdownRow(label: 'Counted cash', value: shift.countedCashNaira, isLast: true),
+          _BreakdownRow(
+            label: 'Transfer sales',
+            value: shift.transferTotalNaira,
+          ),
+          _BreakdownRow(
+            label: 'Customer account sales',
+            value: shift.creditTotalNaira,
+          ),
+          _BreakdownRow(
+            label: 'Counted cash',
+            value: shift.countedCashNaira,
+            isLast: true,
+          ),
         ],
       ),
     );
@@ -554,7 +682,11 @@ class _RangeChip extends StatelessWidget {
   final bool selected;
   final VoidCallback onTap;
 
-  const _RangeChip({required this.label, required this.selected, required this.onTap});
+  const _RangeChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -570,7 +702,9 @@ class _RangeChip extends StatelessWidget {
           alignment: Alignment.center,
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(AppSpacing.chipRadius),
-            border: Border.all(color: selected ? AppColors.accent : AppColors.border),
+            border: Border.all(
+              color: selected ? AppColors.accent : AppColors.border,
+            ),
           ),
           child: Text(
             label,
@@ -609,9 +743,13 @@ class _DailyChart extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
                     Container(
-                      height: maxValue == 0 ? 4 : 8 + (day.total / maxValue) * 72,
+                      height: maxValue == 0
+                          ? 4
+                          : 8 + (day.total / maxValue) * 72,
                       decoration: BoxDecoration(
-                        color: isToday(day.day) ? AppColors.accent : AppColors.border,
+                        color: isToday(day.day)
+                            ? AppColors.accent
+                            : AppColors.border,
                         borderRadius: BorderRadius.circular(4),
                       ),
                     ),
@@ -637,7 +775,11 @@ class _BreakdownRow extends StatelessWidget {
   final int value;
   final bool isLast;
 
-  const _BreakdownRow({required this.label, required this.value, this.isLast = false});
+  const _BreakdownRow({
+    required this.label,
+    required this.value,
+    this.isLast = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -646,7 +788,9 @@ class _BreakdownRow extends StatelessWidget {
       decoration: BoxDecoration(
         border: isLast
             ? null
-            : const Border(bottom: BorderSide(color: AppColors.border, width: 1)),
+            : const Border(
+                bottom: BorderSide(color: AppColors.border, width: 1),
+              ),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
