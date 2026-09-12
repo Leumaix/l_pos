@@ -13,11 +13,13 @@ class NoShiftOpenException implements Exception {
 }
 
 /// Thrown by [ShiftRepository.openDay] when a shift is already open.
-/// Structurally impossible to hit via the real UI (Home only shows the
-/// Open Day action when [ShiftRepository.currentShift] is null), but a
-/// real, named failure mode for the same "don't assume, the write can
-/// still race" reasons every other repository in this app names its
-/// exceptions rather than letting a raw Firestore error surface.
+/// Home only shows the Open Day action once [watchCurrentShift] has
+/// delivered a genuinely trustworthy "nothing open" snapshot (see that
+/// method's own doc comment on why an untrustworthy one is never
+/// emitted as a confident null) — but this can still legitimately race
+/// two devices opening within the same round-trip, so it stays a real,
+/// named failure mode rather than a raw Firestore error surfacing, same
+/// as every other repository in this app.
 class ShiftAlreadyOpenException implements Exception {
   const ShiftAlreadyOpenException();
 }

@@ -136,10 +136,36 @@ class FirebaseShiftRepository implements ShiftRepository {
     return _firebaseAuth.authStateChanges().asyncExpand((user) {
       if (user == null) return Stream.value(null);
       final firestore = _firebaseAuth.activeFirestore!;
+      // includeMetadataChanges: true — without it, a snapshot that's
+      // identical in content to the previous one (e.g. a stale cached
+      // "no shift" read later reconfirmed by the server as still "no
+      // shift") never re-fires at all, so the metadata-only transition
+      // from untrustworthy to trustworthy below would otherwise be
+      // silently dropped.
       return firestore
           .doc('businesses/$kBusinessId/shiftState/current')
-          .snapshots()
-          .map((doc) => _openShiftFromData(doc.data()));
+          .snapshots(includeMetadataChanges: true)
+          .expand((snapshot) {
+            // A snapshot served from local cache, or one reflecting a
+            // write we ourselves have in flight but the server hasn't
+            // ack'd yet, isn't trustworthy enough to answer "is a shift
+            // open" with — it can be stale relative to what another
+            // session already committed server-side. Confirmed live in
+            // production: a stale cached "no shift" read let Home show
+            // the Open Day button for a business day that was, in fact,
+            // still open — the write then failed server-side with
+            // ShiftAlreadyOpenException, even though the UI never showed
+            // a shift as open. Skipping (not emitting anything for) an
+            // untrustworthy snapshot leaves every downstream consumer
+            // (currentShiftProvider, the cached currentShift getter
+            // below) in whatever state they already confidently knew —
+            // loading, if this is the very first snapshot — rather than
+            // overwriting it with an unreliable answer.
+            if (snapshot.metadata.isFromCache || snapshot.metadata.hasPendingWrites) {
+              return const <OpenShift?>[];
+            }
+            return [_openShiftFromData(snapshot.data())];
+          });
     });
   }
 
